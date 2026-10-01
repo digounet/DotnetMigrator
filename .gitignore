@@ -1,0 +1,9 @@
+bin/
+obj/
+.vs/
+*.user
+TestResults/
+nupkg/
+samples/**/*.net10/
+samples/**/*.migration-report/
+.claude/

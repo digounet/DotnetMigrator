@@ -1,0 +1,22 @@
+@using System.Web.Mvc.Html
+@model IEnumerable<LegacyShop.Core.Domain.ProdutoEntidade>
+
+@helper Etiqueta(string texto) {
+    <span class="label label-info">@texto</span>
+}
+
+<h2>Produtos</h2>
+@using (Ajax.BeginForm("Buscar", "Home", new AjaxOptions { UpdateTargetId = "resultado" }))
+{
+    <input type="text" name="termo" />
+}
+<div id="resultado"></div>
+<ul>
+    @foreach (var p in Model)
+    {
+        <li>@p.Nome @Etiqueta(p.Categoria)</li>
+    }
+</ul>
+<script>
+    var produtos = @Html.Raw(Json.Encode(Model));
+</script>

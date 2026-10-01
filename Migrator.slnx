@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Migrator.Cli/Migrator.Cli.csproj" />
+    <Project Path="src/Migrator.Core/Migrator.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Migrator.Tests/Migrator.Tests.csproj" />
+  </Folder>
+</Solution>

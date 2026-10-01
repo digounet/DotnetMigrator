@@ -1,0 +1,20 @@
+@model IEnumerable<LegacyShop.Core.Domain.ProdutoEntidade>
+@{
+    ViewBag.Title = "Início";
+}
+<div class="jumbotron">
+    <h1>Loja Exemplo</h1>
+    <p class="lead">Bem-vindo, @ViewBag.Usuario</p>
+</div>
+<div class="row">
+    @foreach (var produto in Model)
+    {
+        <div class="col-md-3">
+            <h3>@produto.Nome</h3>
+            @Html.Preco(produto.Preco)
+        </div>
+    }
+</div>
+@section scripts {
+    @Scripts.Render("~/bundles/jqueryval")
+}

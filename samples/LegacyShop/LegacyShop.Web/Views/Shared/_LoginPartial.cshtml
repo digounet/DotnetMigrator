@@ -1,0 +1,8 @@
+@if (Request.IsAuthenticated)
+{
+    <p class="navbar-text">Olá, @User.Identity.Name!</p>
+}
+else
+{
+    @Html.ActionLink("Entrar", "Login", "Account", routeValues: null, htmlAttributes: new { @class = "btn btn-link" })
+}
