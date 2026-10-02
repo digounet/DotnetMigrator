@@ -718,6 +718,7 @@ public static class AwsArchitect
         **/*.user
         **/_Legacy/
         **/_migration-report/
+        _secrets/
         .git/
         .migrator-output
         **/Dockerfile

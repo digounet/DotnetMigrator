@@ -12,6 +12,8 @@ public sealed record MigrationOptions
     public TimeSpan BuildTimeout { get; init; } = TimeSpan.FromMinutes(30);
     /// <summary>Cloud provider for the architecture proposal and container artifacts. None disables the advisor.</summary>
     public CloudTarget Cloud { get; init; } = CloudTarget.Aws;
+    /// <summary>Keep credentials inside the generated appsettings*.json instead of moving them to _secrets/ (not recommended).</summary>
+    public bool KeepSecrets { get; init; }
     /// <summary>Optional LLM assistance (build-fix loop, conversion drafts, executive narrative). Disabled by default.</summary>
     public Llm.LlmOptions Llm { get; init; } = new();
 }

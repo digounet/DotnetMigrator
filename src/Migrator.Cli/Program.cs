@@ -59,11 +59,12 @@ var migrateCloud = Cloud();
 var migrateLlm = Llm(); var migrateLlmModel = LlmModel(); var migrateLlmEndpoint = LlmEndpoint(); var migrateLlmRounds = LlmRounds(); var migrateLlmNoCache = LlmNoCache(); var migrateLlmTimeout = LlmTimeout();
 var output = new Option<string?>("--output", "-o") { Description = "Pasta de saída da aplicação migrada (padrão: <pasta-da-solução>.net10, ao lado da original)." };
 var force = new Option<bool>("--force") { Description = "Substitui uma saída gerada anteriormente pelo Migrator." };
+var keepSecrets = new Option<bool>("--keep-secrets") { Description = "Mantém senhas e chaves dentro do appsettings*.json gerado em vez de movê-las para _secrets/ (não recomendado)." };
 var noBuild = new Option<bool>("--no-build") { Description = "Não executa o build de verificação após a migração." };
 var timeout = new Option<int>("--build-timeout") { Description = "Tempo máximo do build de verificação, em minutos.", DefaultValueFactory = _ => 30 };
 var migrate = new Command("migrate", "Gera uma cópia migrada para .NET 10 (com Dockerfiles), compila a saída e gera o inventário, as sugestões de modernização e a arquitetura alvo.")
 {
-    migrateInput, output, migrateReport, migrateOffline, migrateCloud, force, noBuild, timeout,
+    migrateInput, output, migrateReport, migrateOffline, migrateCloud, force, noBuild, timeout, keepSecrets,
     migrateLlm, migrateLlmModel, migrateLlmEndpoint, migrateLlmRounds, migrateLlmNoCache, migrateLlmTimeout
 };
 migrate.SetAction((parse, ct) => RunCommand.ExecuteAsync(new Migrator.Core.Models.MigrationOptions
@@ -75,6 +76,7 @@ migrate.SetAction((parse, ct) => RunCommand.ExecuteAsync(new Migrator.Core.Model
     Cloud = ParseCloud(parse.GetValue(migrateCloud)),
     Llm = BuildLlm(parse.GetValue(migrateLlm), parse.GetValue(migrateLlmModel), parse.GetValue(migrateLlmEndpoint), parse.GetValue(migrateLlmRounds), parse.GetValue(migrateLlmNoCache), parse.GetValue(migrateLlmTimeout)),
     Force = parse.GetValue(force),
+    KeepSecrets = parse.GetValue(keepSecrets),
     VerifyBuild = !parse.GetValue(noBuild),
     BuildTimeout = TimeSpan.FromMinutes(Math.Max(1, parse.GetValue(timeout)))
 }, ct));

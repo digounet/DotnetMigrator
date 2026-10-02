@@ -62,7 +62,7 @@ public sealed class MigrationEngine
 
         var map = projects.ToDictionary(p => p.ProjectPath, p => Path.GetRelativePath(workspace.RootDir, p.ProjectPath), StringComparer.OrdinalIgnoreCase);
         using var nuget = new NuGetClient(options.Offline);
-        var context = new ProjectMigrationContext(workspace.RootDir, map, new PackagePlanner(nuget), UsesSystemDataSqlClient(projects), options.Cloud);
+        var context = new ProjectMigrationContext(workspace.RootDir, map, new PackagePlanner(nuget), UsesSystemDataSqlClient(projects), options.Cloud, workspace.Name, options.KeepSecrets);
 
         var migrated = new List<MigratedProject>();
         foreach (var project in projects)
@@ -112,6 +112,7 @@ public sealed class MigrationEngine
             foreach (var project in migrated) await ApplyAsync(project.Plan, result.OutputDir!);
             WriteSolution(result, workspace);
             CopyRootFiles(workspace.RootDir, result.OutputDir!, result);
+            WriteRootGitIgnore(result.OutputDir!);
             await File.WriteAllTextAsync(Path.Combine(result.OutputDir!, WorkspaceLoader.OutputMarkerFile),
                 $"Gerado pelo Migrator em {DateTime.Now:O} a partir de {workspace.RootDir}{Environment.NewLine}", cancellationToken);
 
@@ -288,6 +289,17 @@ public sealed class MigrationEngine
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             await File.WriteAllTextAsync(target, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
         }
+    }
+
+    private static void WriteRootGitIgnore(string outputDir)
+    {
+        var path = Path.Combine(outputDir, ".gitignore");
+        var required = new[] { "bin/", "obj/", ".vs/", "*.user", "_migration-report/", SecretsExtractor.RootFolder + "/" };
+        var existing = File.Exists(path) ? File.ReadAllLines(path).Select(l => l.Trim()).ToHashSet(StringComparer.Ordinal) : [];
+        var missing = required.Where(r => !existing.Contains(r)).ToList();
+        if (missing.Count == 0) return;
+        var header = existing.Count == 0 ? "# Gerado pelo Migrator" + Environment.NewLine : Environment.NewLine + "# Acrescentado pelo Migrator" + Environment.NewLine;
+        File.AppendAllText(path, header + string.Join(Environment.NewLine, missing) + Environment.NewLine);
     }
 
     private static string WriteSolution(SolutionResult result, Workspace workspace)

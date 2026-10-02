@@ -18,7 +18,7 @@ public sealed class OutputPlan
     private static string Normalize(string path) => path.Replace('/', Path.DirectorySeparatorChar).TrimStart(Path.DirectorySeparatorChar);
 }
 
-public sealed record ProjectMigrationContext(string RootDir, IReadOnlyDictionary<string, string> ProjectMap, PackagePlanner Planner, bool PreserveSqlEncryption, CloudTarget Cloud = CloudTarget.Aws);
+public sealed record ProjectMigrationContext(string RootDir, IReadOnlyDictionary<string, string> ProjectMap, PackagePlanner Planner, bool PreserveSqlEncryption, CloudTarget Cloud = CloudTarget.Aws, string SolutionName = "app", bool KeepSecrets = false);
 
 public static partial class ProjectMigrator
 {
@@ -125,6 +125,15 @@ public static partial class ProjectMigrator
                 bundles[key] = value;
 
         var config = ConfigMigrator.Migrate(project, ctx.PreserveSqlEncryption);
+        var secrets = ctx.KeepSecrets ? new SecretsPlan() : SecretsExtractor.Extract(config, ctx.SolutionName, project.Name);
+        if (secrets.Any)
+        {
+            config.Items.RemoveAll(i => i.RuleId == "CFG-SECRETS");
+            WriteSecretsArtifacts(project, secrets, plan, result.RelativeDir, items);
+            foreach (var m in result.Modernizations.Where(m => m.RuleId == "MOD-SEC-SECRETS"))
+                m.Why = m.Why.Replace("foram copiadas para o appsettings.json e acabariam na imagem Docker/repositório.",
+                    $"foram retiradas do appsettings.json e ficaram em {SecretsExtractor.RootFolder}/{project.Name}/ (fora do repositório e da imagem).");
+        }
         items.AddRange(config.Items);
 
         var facts = new CodeFacts();
@@ -211,6 +220,8 @@ public static partial class ProjectMigrator
         items.AddRange(packages.Items);
 
         var spec = BuildProjectSpec(project, ctx, entries, facts, config, packages, plan, items, result.RelativeDir);
+        if (secrets.Any && project.Kind != ProjectKind.ClassLibrary && spec.Properties.All(p => p.Name != "UserSecretsId"))
+            spec.Properties.Add(("UserSecretsId", SecretsExtractor.UserSecretsId(ctx.SolutionName, project.Name)));
         items.Add(Item(project, InventorySeverity.Info, InventoryCategory.ProjectFile, "PRJ-SDK",
             $"{csprojName} convertido para SDK-style ({spec.Sdk}, {spec.Properties.First(p => p.Name == "TargetFramework").Value})",
             project.IsSdkStyle ? "TargetFramework atualizado." : "packages.config virou PackageReference; itens explícitos foram substituídos pelos globs do SDK.",
@@ -240,6 +251,23 @@ public static partial class ProjectMigrator
         }
 
         return new MigratedProject(result, spec, plan, profile);
+    }
+
+    private static void WriteSecretsArtifacts(ProjectInfo project, SecretsPlan secrets, OutputPlan plan, string projectOut, List<InventoryItem> items)
+    {
+        var folder = Path.Combine(SecretsExtractor.RootFolder, project.Name);
+        plan.Write(Path.Combine(folder, "README.md"), SecretsExtractor.Readme(secrets, project.Name));
+        plan.Write(Path.Combine(folder, "secrets.template.json"), SecretsExtractor.TemplateJson(secrets));
+        foreach (var environment in SecretsExtractor.Environments(secrets))
+            plan.Write(Path.Combine(folder, environment == null ? "appsettings.Secrets.json" : $"appsettings.{environment}.Secrets.json"), SecretsExtractor.AppSettingsShapedJson(secrets, environment));
+        plan.Write(Path.Combine(folder, "create-secrets.sh"), SecretsExtractor.CreateScriptBash(secrets, project.Name));
+        plan.Write(Path.Combine(folder, "create-secrets.ps1"), SecretsExtractor.CreateScriptPowerShell(secrets, project.Name));
+        plan.Write(Path.Combine(folder, "ecs-task-secrets.json"), SecretsExtractor.EcsTaskSecretsJson(secrets));
+        plan.Write(Path.Combine(folder, "set-user-secrets.sh"), SecretsExtractor.UserSecretsScript(secrets, Path.Combine(projectOut, Path.GetFileName(project.ProjectPath))));
+        items.Add(Item(project, InventorySeverity.Info, InventoryCategory.Configuration, "CFG-SECRETS-EXTRACTED",
+            $"{secrets.Secrets.Count} segredo(s) retirados do appsettings*.json",
+            $"Marcador '<secret: nome>' no lugar de {string.Join(", ", secrets.Secrets.Select(s => s.ConfigPath).Distinct().Take(6))}. Valores, scripts para o Secrets Manager, bloco da task definition e user-secrets em {folder}/ (ignorado pelo git e pelo Docker).",
+            "Rode create-secrets.sh para criar no AWS Secrets Manager e set-user-secrets.sh para desenvolvimento local; depois rotacione as credenciais que estavam em texto claro.", "appsettings.json", auto: true));
     }
 
     private static XElement? LoadConfig(ProjectInfo project)

@@ -53,7 +53,7 @@ public sealed class SampleSolutionTests : IDisposable
         Assert.Contains(web.Modernizations, m => m.RuleId == "MOD-CS-STATIC-STATE");   // static List<Pedido> in PedidosController
         Assert.Contains(web.Modernizations, m => m.RuleId == "MOD-SEC-SECRETS" && m.Evidence!.Contains("network/@password"));
         Assert.Contains(web.Modernizations, m => m.RuleId == "MOD-SEC-SECRETS-CODE" && m.Evidence!.Contains("TokenIntegracaoErp"));
-        Assert.Contains(web.Inventory, i => i.RuleId == "CFG-SECRETS" && i.Suggestion.Contains("Secrets Manager"));
+        Assert.Contains(web.Inventory, i => i.RuleId == "CFG-SECRETS-EXTRACTED" && i.Suggestion.Contains("Secrets Manager"));
         Assert.Contains(worker.Modernizations, m => m.RuleId == "MOD-WIN-SERVICE");
         Assert.Contains(worker.Modernizations, m => m.RuleId == "MOD-ARCH-DB-INTEGRATED");
         Assert.Contains(worker.Modernizations, m => m.RuleId == "MOD-ARCH-HYBRID" && m.Evidence!.Contains("erp.interno"));
@@ -139,6 +139,24 @@ public sealed class SampleSolutionTests : IDisposable
         Assert.False(Exists("LegacyShop.Web/Controllers/LegadoController.cs"));
         Assert.False(Exists("LegacyShop.Web/packages.config"));
         Assert.Contains("Encrypt=False", Read("LegacyShop.Web/appsettings.Production.json"));
+
+        // Credentials leave the appsettings and land in _secrets/ (outside git and Docker)
+        var appsettings = Read("LegacyShop.Web/appsettings.json");
+        Assert.DoesNotContain("Senha@123", appsettings);
+        Assert.DoesNotContain("SmtpSenha!", appsettings);
+        Assert.DoesNotContain("sk_test_123456789", appsettings);
+        Assert.Contains("<secret: legacyshop/legacyshop.web/ConnectionStrings/RelatoriosConnection>", appsettings);
+        Assert.Contains("Integrated Security=True", appsettings); // LocalDb connection string has no password: untouched
+        Assert.Contains("Senha@123", Read("_secrets/LegacyShop.Web/appsettings.Secrets.json"));
+        Assert.True(Exists("_secrets/LegacyShop.Web/create-secrets.sh"));
+        Assert.True(Exists("_secrets/LegacyShop.Web/ecs-task-secrets.json"));
+        Assert.True(Exists("_secrets/LegacyShop.Importador/appsettings.Secrets.json"));
+        Assert.Contains("<UserSecretsId>", Read("LegacyShop.Web/LegacyShop.Web.csproj"));
+        Assert.DoesNotContain("<UserSecretsId>", Read("LegacyShop.Core/LegacyShop.Core.csproj"));
+        Assert.Contains("_secrets/", Read(".gitignore"));
+        Assert.Contains("_secrets/", Read(".dockerignore"));
+        Assert.Contains(result.Projects[0].Inventory, i => i.RuleId == "CFG-SECRETS-EXTRACTED" && i.AutoMigrated);
+        Assert.DoesNotContain(result.Projects[0].Inventory, i => i.RuleId == "CFG-SECRETS");
         Assert.Contains("<script src=\"~/Scripts/jquery-3.4.1.js\" asp-append-version=\"true\"></script>", Read("LegacyShop.Web/Views/Shared/_Layout.cshtml"));
 
         var core = Read("LegacyShop.Core/LegacyShop.Core.csproj");
