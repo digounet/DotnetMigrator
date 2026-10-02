@@ -213,6 +213,17 @@ public sealed class MigrationEngine
             profiles.Add((project.Result, merged));
 
             if (hosting.Primary is AwsHosting.NotDeployable or AwsHosting.Desktop || project.Result.OutputProjectPath == null) continue;
+            if (hosting.Primary == AwsHosting.Lambda)
+            {
+                project.Result.Inventory.Add(new InventoryItem
+                {
+                    Project = project.Result.Project.Name, Severity = InventorySeverity.Info, Category = InventoryCategory.ProjectFile, RuleId = "AWS-LAMBDA",
+                    Title = "Recomendado como AWS Lambda: sem Dockerfile, empacotar com Amazon.Lambda.Tools",
+                    Description = "Automação orientada a evento; o ponto de entrada precisa virar um handler (Amazon.Lambda.Core) com o gatilho indicado na arquitetura.",
+                    Suggestion = "Se preferir manter o Main() sem alterações, use a alternativa 'tarefa ECS agendada' e gere o Dockerfile rodando com --cloud aws após ajustar."
+                });
+                continue;
+            }
             var dependencies = closure.Where(c => c.Result.OutputProjectPath != null).Select(c => c.Result.OutputProjectPath!).ToList();
             var dockerfile = AwsArchitect.Dockerfile(project.Result.Project, hosting, merged, project.Result.OutputProjectPath, dependencies);
             project.Plan.Write(Path.Combine(project.Result.RelativeDir, "Dockerfile"), dockerfile);

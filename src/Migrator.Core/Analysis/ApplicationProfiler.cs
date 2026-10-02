@@ -10,11 +10,11 @@ public enum Signal
     // Data
     SqlServer, Oracle, MySql, PostgreSql, Sqlite, OleDbOrOdbc, LocalDb, Ef6, EfCore, Edmx, MongoDb, Elasticsearch,
     // Storage
-    FileSystemWrites, AppDataFolder, UncPaths, WindowsPaths, FileUploads, Ftp, AzureStorage,
+    FileSystemWrites, AppDataFolder, UncPaths, WindowsPaths, FileUploads, Ftp, AzureStorage, FileWatcher, SpreadsheetFiles, OfficeOleDb,
     // Messaging
     Msmq, RabbitMq, AzureServiceBus, Kafka, MessageBusFramework,
     // Email
-    Smtp,
+    Smtp, MailboxReading,
     // State
     InProcSession, ExternalSession, LocalCache, StaticState, Redis, MachineKey,
     // Jobs
@@ -26,7 +26,7 @@ public enum Signal
     // Windows-only
     SystemDrawing, EventLog, PerformanceCounter, Registry, Com, ComPlus, PInvoke, OfficeInterop, CrystalReports, ReportViewer, Wmi, IisAdministration, WinForms, Wpf,
     // Observability / config
-    FileLogging, AppInsights, AzureKeyVault, SecretsInConfig, AwsSdk,
+    FileLogging, AppInsights, AzureKeyVault, SecretsInConfig, SecretsInCode, AwsSdk,
     // Runtime behaviour
     DateTimeNow, WindowsTimeZoneIds, SyncOverAsync, BinaryFormatter, LargeUploads, LongRequests, Pdf
 }
@@ -144,7 +144,11 @@ public static partial class ApplicationProfiler
         new(Signal.Kafka, Rx(@"\bConfluent\.Kafka\b")),
         new(Signal.MessageBusFramework, Rx(@"\bMassTransit\b|\bNServiceBus\b|\bRebus\b|\bIBusControl\b|\bIEndpointInstance\b"), DetailGroup: 0),
 
-        new(Signal.Smtp, Rx(@"\bSmtpClient\b|\bSystem\.Net\.Mail\b|\bMailKit\b|\bSendGrid\b")),
+        new(Signal.Smtp, Rx(@"\bSmtpClient\b|\bSystem\.Net\.Mail\b|\bMailKit\.Net\.Smtp\b|\bSmtpClient\b|\bSendGrid\b")),
+        new(Signal.MailboxReading, Rx(@"\bMicrosoft\.Exchange\.WebServices\b|\bExchangeService\b|\bFindItems\(|\bImapClient\b|\bPop3Client\b|\bMailKit\.Net\.(Imap|Pop3)\b|\bOpenPop\b|\bS22\.Imap\b|\bLimilabs\b|\bAE\.Net\.Mail\b|\bGraphServiceClient\b[^;\n]*\.(Me|Users)\b|\bMicrosoft\.Graph\b|\bOutlook\.(Application|MAPIFolder|NameSpace)\b"), DetailGroup: 0),
+        new(Signal.FileWatcher, Rx(@"\bFileSystemWatcher\b|\bDirectory\.(GetFiles|EnumerateFiles)\([^)]*\)[^;\n]*(Sleep|Timer|while)|\bwhile\s*\([^)]*\)\s*\{[^}]*Directory\.(GetFiles|EnumerateFiles)\("), OnlyKinds: Workers),
+        new(Signal.SpreadsheetFiles, Rx(@"\bOfficeOpenXml\b|\bExcelPackage\b|\bClosedXML\b|\bXLWorkbook\b|\bNPOI\b|\bExcelDataReader\b|\bCsvHelper\b|\bCsvReader\b|\.xlsx?""")),
+        new(Signal.OfficeOleDb, Rx(@"Microsoft\.(ACE|Jet)\.OLEDB"), DetailGroup: 0),
 
         new(Signal.InProcSession, Rx(@"\bSession\[|\bHttpSessionState(Base)?\b|\bSession\.(Add|Remove|Clear|Abandon|SetString|GetString)\(")),
         new(Signal.LocalCache, Rx(@"\bHttpRuntime\.Cache\b|\bHttpContext\.Cache\b|\bMemoryCache\.Default\b|\bObjectCache\b|\bIMemoryCache\b|\bSystem\.Runtime\.Caching\b|\bnew\s+MemoryCache\(")),
@@ -190,6 +194,8 @@ public static partial class ApplicationProfiler
         new(Signal.AzureKeyVault, Rx(@"\bKeyVaultClient\b|\bAzure\.Security\.KeyVault\b|\bSecretClient\b")),
         new(Signal.AwsSdk, Rx(@"\bAmazon\.(S3|SQS|SNS|DynamoDBv2|Lambda|SecretsManager|SimpleEmail|Runtime)\b")),
 
+        // Credentials embedded in source: connection strings with a password, named key/secret/token literals, AWS access keys.
+        new(Signal.SecretsInCode, Rx(@"""[^""\r\n]*\b(?:Password|Pwd)\s*=\s*(?!\s*[;""{]|\$\{|%)[^;""\r\n]{3,}[^""\r\n]*""|\b(?<name>\w*(?:ApiKey|Api_Key|SecretKey|ClientSecret|AccessKey|SecretAccessKey|Password|Senha|Token|PrivateKey)\w*)\s*=\s*""(?!\s*$|\{|<)[^""\r\n]{6,}""|""(?<name>AKIA[0-9A-Z]{16})"""), DetailGroup: 1),
         new(Signal.DateTimeNow, Rx(@"\bDateTime\.(Now|Today)\b|\bDateTimeOffset\.Now\b")),
         new(Signal.WindowsTimeZoneIds, Rx(@"FindSystemTimeZoneById\(\s*""(?<id>[^""]*Standard Time)"""), DetailGroup: 1),
         new(Signal.SyncOverAsync, Rx(@"\)\.Result\b|\)\.Wait\(\)|\.GetAwaiter\(\)\.GetResult\(\)")),
@@ -222,6 +228,9 @@ public static partial class ApplicationProfiler
         ("Sustainsys.Saml2", Signal.Saml), ("Kentor.AuthServices", Signal.Saml), ("ITfoxtec.Identity.Saml2", Signal.Saml),
         ("Serilog.Sinks.File", Signal.FileLogging), ("Serilog.Sinks.RollingFile", Signal.FileLogging),
         ("MailKit", Signal.Smtp), ("SendGrid", Signal.Smtp),
+        ("Microsoft.Exchange.WebServices", Signal.MailboxReading), ("Exchange.WebServices.Managed.Api", Signal.MailboxReading), ("OpenPop.NET", Signal.MailboxReading), ("S22.Imap", Signal.MailboxReading),
+        ("Limilabs.Mail", Signal.MailboxReading), ("AE.Net.Mail", Signal.MailboxReading), ("Microsoft.Graph", Signal.MailboxReading), ("Microsoft.Office.Interop.Outlook", Signal.MailboxReading),
+        ("EPPlus", Signal.SpreadsheetFiles), ("ClosedXML", Signal.SpreadsheetFiles), ("NPOI", Signal.SpreadsheetFiles), ("ExcelDataReader", Signal.SpreadsheetFiles), ("CsvHelper", Signal.SpreadsheetFiles),
         ("RestSharp", Signal.ExternalHttp), ("Refit", Signal.ExternalHttp), ("Flurl", Signal.ExternalHttp),
         ("Topshelf", Signal.WindowsServiceHost),
         ("System.Drawing.Common", Signal.SystemDrawing),
@@ -367,6 +376,22 @@ public static partial class ApplicationProfiler
         foreach (var cs in configuration.Element("connectionStrings")?.Elements("add") ?? [])
             if (PasswordInConnectionString().IsMatch(cs.Attribute("connectionString")?.Value ?? ""))
                 profile.Add(Signal.SecretsInConfig, fileName, $"connectionStrings/{cs.Attribute("name")?.Value}");
+        // Any other attribute that looks like a credential: <network password>, <identity impersonate userName password>,
+        // <sessionState sqlConnectionString="...Password=...">, custom sections, fixed <machineKey>.
+        foreach (var attribute in configuration.Descendants().Attributes())
+        {
+            var name = attribute.Name.LocalName;
+            var value = attribute.Value.Trim();
+            if (value.Length < 3 || value.StartsWith("AutoGenerate", StringComparison.OrdinalIgnoreCase) || value.StartsWith('$') || value.StartsWith('%')) continue;
+            var owner = attribute.Parent!;
+            var isAppSettingValue = owner.Name.LocalName == "add" && owner.Parent?.Name.LocalName is "appSettings" or "connectionStrings";
+            if (isAppSettingValue) continue; // handled above with the key name
+            if (name.Contains("publicKeyToken", StringComparison.OrdinalIgnoreCase) || owner.AncestorsAndSelf().Any(a => a.Name.LocalName is "runtime" or "assemblyBinding" or "configSections")) continue;
+            if (Secret().IsMatch(name) && name is not ("tokenType" or "type" or "name" or "key"))
+                profile.Add(Signal.SecretsInConfig, fileName, $"{owner.Name.LocalName}/@{name}");
+            else if (name.EndsWith("ConnectionString", StringComparison.OrdinalIgnoreCase) && PasswordInConnectionString().IsMatch(value))
+                profile.Add(Signal.SecretsInConfig, fileName, $"{owner.Name.LocalName}/@{name}");
+        }
 
         var web = configuration.Element("system.web");
         if (web != null)
@@ -383,7 +408,10 @@ public static partial class ApplicationProfiler
             if (auth?.Equals("Windows", StringComparison.OrdinalIgnoreCase) == true) profile.Add(Signal.WindowsAuth, fileName, "authentication mode=Windows");
             if (web.Element("membership") != null || web.Element("roleManager")?.Attribute("enabled")?.Value == "true") profile.Add(Signal.Membership, fileName, "<membership>/<roleManager>");
             if (web.Element("machineKey") is { } mk && mk.Attribute("validationKey")?.Value is { } vk && !vk.StartsWith("AutoGenerate", StringComparison.OrdinalIgnoreCase))
+            {
                 profile.Add(Signal.MachineKey, fileName, "machineKey fixa");
+                profile.Add(Signal.SecretsInConfig, fileName, "machineKey/@validationKey");
+            }
             var culture = web.Element("globalization")?.Attribute("culture")?.Value;
             if (!string.IsNullOrEmpty(culture) && !culture.Equals("auto", StringComparison.OrdinalIgnoreCase)) profile.Culture = culture;
 

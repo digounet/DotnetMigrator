@@ -11,7 +11,13 @@ public static class AwsArchitect
     public const string DefaultCulture = "pt-BR";
 
     private static readonly Signal[] HardWindows =
-        [Signal.Com, Signal.ComPlus, Signal.Registry, Signal.PInvoke, Signal.OfficeInterop, Signal.CrystalReports, Signal.ReportViewer, Signal.Wmi, Signal.IisAdministration, Signal.WinForms, Signal.Wpf];
+        [Signal.Com, Signal.ComPlus, Signal.Registry, Signal.PInvoke, Signal.OfficeInterop, Signal.CrystalReports, Signal.ReportViewer, Signal.Wmi, Signal.IisAdministration, Signal.WinForms, Signal.Wpf, Signal.OfficeOleDb];
+
+    /// <summary>Soft dependencies that do not stop a worker from becoming a Lambda (the conversion is required in any case).</summary>
+    private static readonly Signal[] LambdaTolerated = [Signal.WindowsServiceHost, Signal.EventLog, Signal.UncPaths];
+
+    /// <summary>Source files above which a run-to-completion automation is considered too big for a Lambda handler rewrite.</summary>
+    public const int LambdaMaxSourceFiles = 25;
 
     private static readonly Signal[] SoftWindows =
         [Signal.SystemDrawing, Signal.EventLog, Signal.PerformanceCounter, Signal.WindowsServiceHost, Signal.Msmq, Signal.WindowsAuth, Signal.ActiveDirectory, Signal.UncPaths];
@@ -22,7 +28,8 @@ public static class AwsArchitect
         [Signal.OfficeInterop] = "Office Interop", [Signal.CrystalReports] = "Crystal Reports", [Signal.ReportViewer] = "ReportViewer/RDLC", [Signal.Wmi] = "WMI (System.Management)",
         [Signal.IisAdministration] = "Microsoft.Web.Administration (IIS)", [Signal.WinForms] = "Windows Forms", [Signal.Wpf] = "WPF",
         [Signal.SystemDrawing] = "System.Drawing (GDI+)", [Signal.EventLog] = "Event Log", [Signal.PerformanceCounter] = "PerformanceCounter", [Signal.WindowsServiceHost] = "ServiceBase (Windows Service)",
-        [Signal.Msmq] = "MSMQ", [Signal.WindowsAuth] = "Autenticação Windows (Negotiate)", [Signal.ActiveDirectory] = "Active Directory (System.DirectoryServices)", [Signal.UncPaths] = "compartilhamentos SMB (UNC)"
+        [Signal.Msmq] = "MSMQ", [Signal.WindowsAuth] = "Autenticação Windows (Negotiate)", [Signal.ActiveDirectory] = "Active Directory (System.DirectoryServices)", [Signal.UncPaths] = "compartilhamentos SMB (UNC)",
+        [Signal.OfficeOleDb] = "provider OLE DB ACE/Jet (Excel/Access, só Windows 32/64 bits com o Access Database Engine)"
     };
 
     public static HostingRecommendation Recommend(ProjectInfo project, ApplicationProfile profile)
@@ -82,11 +89,34 @@ public static class AwsArchitect
         {
             var queueDriven = profile.HasAny(Signal.Msmq, Signal.RabbitMq, Signal.MessageBusFramework, Signal.Kafka, Signal.AzureServiceBus);
             var scheduled = profile.HasAny(Signal.Scheduler, Signal.TimerLoop);
+            var fileDriven = profile.HasAny(Signal.FileWatcher, Signal.Ftp) || (profile.HasAny(Signal.FileSystemWrites, Signal.UncPaths, Signal.WindowsPaths) && profile.Has(Signal.SpreadsheetFiles));
+            var mailboxDriven = profile.Has(Signal.MailboxReading);
+            var eventDriven = queueDriven || fileDriven || mailboxDriven;
+            var blocksLambda = rec.SoftWindowsDependencies.Count > 0 && SoftWindows.Where(profile.Has).Any(s => !LambdaTolerated.Contains(s));
+            var small = project.SourceFiles.Count() <= LambdaMaxSourceFiles;
             if (requiresWindows)
             {
                 rec.Primary = AwsHosting.EcsWindows;
                 rec.Rationale.Add("Depende de componentes exclusivos do Windows: " + string.Join("; ", rec.HardWindowsDependencies) + ". Container Windows no ECS (ou EC2 Windows se precisar de sessão interativa).");
                 rec.Alternatives.Add("ECS Fargate (Linux) após remover as dependências Windows.");
+            }
+            else if (eventDriven && !blocksLambda && small && !profile.Has(Signal.Scheduler))
+            {
+                // Typical back-office automation: reacts to files, e-mails or messages, runs to completion. Serverless is the cheapest and simplest fit.
+                rec.Primary = AwsHosting.Lambda;
+                var triggers = new List<string>();
+                if (fileDriven) triggers.Add("arquivos: S3 Event Notifications (ObjectCreated) → SQS → Lambda; pastas de rede viram um bucket via AWS Storage Gateway (File Gateway) ou os parceiros enviam por AWS Transfer Family");
+                if (mailboxDriven) triggers.Add("e-mail: Amazon SES recebimento (regra → S3 → SQS/Lambda) quando o domínio da caixa puder apontar para a AWS; senão, EventBridge Scheduler disparando a Lambda que consulta a caixa via Microsoft Graph/IMAP");
+                if (queueDriven) triggers.Add("fila: Amazon SQS como gatilho da Lambda (batch, DLQ e retry nativos)");
+                rec.Rationale.Add($"Automação orientada a evento ({(fileDriven ? "arquivos" : "")}{(fileDriven && (mailboxDriven || queueDriven) ? ", " : "")}{(mailboxDriven ? "caixa de e-mail" : "")}{(mailboxDriven && queueDriven ? ", " : "")}{(queueDriven ? "fila" : "")}), {project.SourceFiles.Count()} arquivo(s) de código e sem dependências Windows: AWS Lambda executa só quando há trabalho, sem container 24x7 nem agendamento cego.");
+                rec.Rationale.Add("Gatilhos: " + string.Join("; ", triggers) + ".");
+                rec.Rationale.Add("Limites do Lambda: 15 min por execução, 10 GB de memória, /tmp de até 10 GB; processamento maior que isso vai para a alternativa ECS.");
+                rec.Alternatives.Add("Tarefa ECS Fargate agendada (EventBridge Scheduler) — mantém o Main() como está (sem reescrever para handler); escolha se a execução puder passar de 15 min ou se preferir uniformidade com as demais aplicações.");
+                rec.Alternatives.Add("Worker ECS Fargate contínuo consumindo SQS — para volume alto e constante.");
+                rec.Prerequisites.Add("Reescrever o ponto de entrada como handler Lambda (Amazon.Lambda.Core + Amazon.Lambda.SQSEvents/S3Events) ou usar Amazon.Lambda.Annotations; publicar com Amazon.Lambda.Tools ou imagem de container.");
+                if (mailboxDriven && profile.Get(Signal.MailboxReading)!.Details.Any(d => d.Contains("Exchange", StringComparison.OrdinalIgnoreCase)))
+                    rec.Prerequisites.Add("Trocar EWS por Microsoft Graph (EWS está sendo bloqueado no Exchange Online) ou mover a caixa para recebimento via SES.");
+                if (profile.Has(Signal.FileWatcher)) rec.Prerequisites.Add("Substituir FileSystemWatcher/polling de pasta pelo evento do S3 (não existe 'pasta' no Lambda).");
             }
             else if (queueDriven)
             {
@@ -98,6 +128,9 @@ public static class AwsArchitect
             {
                 rec.Primary = AwsHosting.EcsScheduledTask;
                 rec.Rationale.Add("Processo periódico (timer/agendador): Amazon EventBridge Scheduler dispara uma tarefa ECS Fargate (RunTask) no horário; a task termina ao concluir e não há custo entre execuções.");
+                if (eventDriven)
+                    rec.Rationale.Add("A automação reage a " + (fileDriven ? "arquivos" : mailboxDriven ? "e-mails" : "mensagens") + ": em vez de agendar, dispare pelo evento (S3 Event Notifications, SES recebimento ou SQS) — " +
+                        (!small ? "o tamanho do projeto" : !blocksLambda ? "o agendador embutido (Quartz/Hangfire)" : "as dependências Windows substituíveis") + " foi o que impediu recomendar Lambda diretamente.");
                 rec.Alternatives.Add("ECS Fargate como serviço contínuo (BackgroundService + PeriodicTimer) — mais simples de portar, paga 24x7 e precisa de lock distribuído se escalar.");
                 rec.Alternatives.Add("AWS Lambda agendado pelo EventBridge — se a execução durar menos de 15 min e couber em 10 GB de memória.");
             }
@@ -123,10 +156,14 @@ public static class AwsArchitect
         if (profile.Has(Signal.StaticState)) rec.Prerequisites.Add("Remover estado em coleções estáticas (cada task teria uma cópia).");
         if (profile.HasAny(Signal.FileSystemWrites, Signal.AppDataFolder, Signal.FileUploads, Signal.UncPaths, Signal.WindowsPaths)) rec.Prerequisites.Add("Arquivos persistentes no S3 (ou volume EFS), não no disco do container.");
         if (profile.HasAny(Signal.FileLogging, Signal.EventLog)) rec.Prerequisites.Add("Logs em stdout (JSON) → CloudWatch Logs.");
-        if (profile.Has(Signal.SecretsInConfig) || profile.Databases.Any(d => !d.IntegratedSecurity)) rec.Prerequisites.Add("Segredos e connection strings no Secrets Manager, injetados na task definition.");
+        if (profile.HasAny(Signal.SecretsInConfig, Signal.SecretsInCode) || profile.Databases.Any(d => !d.IntegratedSecurity))
+            rec.Prerequisites.Add(profile.Has(Signal.SecretsInCode)
+                ? "Segredos e connection strings no Secrets Manager, injetados na task definition; remover as credenciais embutidas no código e rotacioná-las."
+                : "Segredos e connection strings no Secrets Manager, injetados na task definition.");
         if (profile.Databases.Any(d => d.IntegratedSecurity && !(d.Server ?? "").Contains("localdb", StringComparison.OrdinalIgnoreCase))) rec.Prerequisites.Add("Connection strings com autenticação SQL (Integrated Security não funciona no Fargate).");
         if (profile.Has(Signal.WindowsServiceHost) && !requiresWindows) rec.Prerequisites.Add("Converter ServiceBase em BackgroundService (Worker Service) para rodar em Linux e encerrar no SIGTERM.");
         if (profile.Has(Signal.Msmq)) rec.Prerequisites.Add("Substituir MSMQ por SQS.");
+        if (profile.Has(Signal.OfficeOleDb)) rec.Prerequisites.Add("Ler Excel/Access sem o provider ACE/Jet (ExcelDataReader/ClosedXML; Access → exportar para RDS) para sair do Windows.");
         if (profile.Has(Signal.DateTimeNow) || profile.Culture != null) rec.Prerequisites.Add("Fuso horário e cultura definidos no container (TZ/LANG no Dockerfile gerado) ou código em UTC.");
         return rec;
     }
@@ -175,6 +212,18 @@ public static class AwsArchitect
             foreach (var (pr, _) in deployables) ecr.UsedBy.Add(pr.Project.Name);
             var cw = Component("cloudwatch", "Amazon CloudWatch (Logs, Metrics, Alarms, Container Insights)", "Logs, métricas e alarmes", "arquivos de log / Event Log / contadores de desempenho", "stdout dos containers vai direto ao CloudWatch Logs; Container Insights dá CPU/memória por serviço; alarmes acionam SNS/auto scaling.", notes: "Defina retenção (ex.: 30 dias) para controlar custo. Traces distribuídos: AWS X-Ray via ADOT.");
             foreach (var (pr, _) in deployables) cw.UsedBy.Add(pr.Project.Name);
+        }
+        var lambdas = deployables.Where(p => p.Result.Hosting!.Primary == AwsHosting.Lambda).ToList();
+        if (lambdas.Count > 0)
+        {
+            var lambda = Component("lambda", "AWS Lambda (.NET)", "Automações orientadas a evento (arquivos, e-mails, filas)", "Windows Services / consoles agendados que ficam ociosos a maior parte do tempo",
+                "Executa só quando há trabalho e cobra por milissegundo; gatilhos nativos de S3, SQS, SES e EventBridge; escala por evento sem configurar auto scaling.", notes: "Runtime gerenciado .NET (ou imagem de container quando o .NET 10 ainda não estiver no runtime gerenciado); empacote com Amazon.Lambda.Tools. Configure DLQ e timeout por função.");
+            foreach (var (pr, _) in lambdas) lambda.UsedBy.Add(pr.Project.Name);
+            if (!anyContainer)
+            {
+                var cw = Component("cloudwatch", "Amazon CloudWatch (Logs, Metrics, Alarms)", "Logs, métricas e alarmes", "arquivos de log / Event Log", "Logs das funções e alarmes de erro/duração.", notes: "Defina retenção.");
+                foreach (var (pr, _) in lambdas) cw.UsedBy.Add(pr.Project.Name);
+            }
         }
         if (deployables.Any(p => p.Result.Hosting!.Primary == AwsHosting.Ec2Windows))
         {
@@ -233,6 +282,30 @@ public static class AwsArchitect
             }
             if (storageProjects.Any(p => p.Profile.Has(Signal.Ftp)))
                 Component("transfer", "AWS Transfer Family", "SFTP/FTPS gerenciado sobre o S3", "servidor FTP", "Troca de arquivos com parceiros sem EC2.", required: false);
+            var fileAutomations = storageProjects.Where(p => p.Result.Project.Kind != ProjectKind.Web && (p.Profile.Has(Signal.FileWatcher) || p.Result.Hosting?.Primary == AwsHosting.Lambda || p.Profile.Has(Signal.SpreadsheetFiles))).ToList();
+            if (fileAutomations.Count > 0)
+            {
+                var ev = Component("s3-events", "Amazon S3 Event Notifications → SQS", "Gatilho das automações de arquivo", "FileSystemWatcher / varredura periódica de pasta",
+                    "Cada arquivo novo no bucket gera um evento; a fila garante retry e DLQ e dispara a Lambda ou escala o worker. Elimina o polling e a janela em que o arquivo ainda está sendo copiado.", notes: "Use prefixos por tipo de arquivo e um prefixo 'processados/' para mover após o sucesso.");
+                foreach (var (pr, _) in fileAutomations) ev.UsedBy.Add(pr.Project.Name);
+                if (fileAutomations.Any(p => p.Profile.HasAny(Signal.UncPaths, Signal.WindowsPaths)))
+                {
+                    var gw = Component("storage-gateway", "AWS Storage Gateway (File Gateway)", "Compartilhamento SMB/NFS on-premises com os arquivos gravados no S3", "pastas de rede onde outros sistemas depositam arquivos",
+                        "Os sistemas que hoje gravam em \\\\servidor\\pasta continuam gravando numa pasta; o File Gateway envia ao S3 e o evento dispara a automação. Permite migrar a automação sem mudar quem produz os arquivos.", required: false,
+                        notes: "Alternativa quando os produtores podem mudar: gravar direto no S3 com AWS CLI/SDK ou enviar por Transfer Family.");
+                    foreach (var (pr, _) in fileAutomations.Where(p => p.Profile.HasAny(Signal.UncPaths, Signal.WindowsPaths))) gw.UsedBy.Add(pr.Project.Name);
+                }
+            }
+        }
+
+        var mailboxProjects = projects.Where(p => p.Profile.Has(Signal.MailboxReading)).ToList();
+        if (mailboxProjects.Count > 0)
+        {
+            var libs = string.Join(", ", mailboxProjects.SelectMany(p => p.Profile.Get(Signal.MailboxReading)!.Details).Distinct().Take(4));
+            var inbound = Component("ses-inbound", "Amazon SES (recebimento) → S3 → SQS/Lambda", "Entrada de e-mails para as automações", libs.Length > 0 ? $"leitura de caixa postal ({libs})" : "leitura de caixa postal",
+                "Com um (sub)domínio apontado para o SES, cada e-mail recebido vira um objeto no S3 e um evento: sem polling, sem credenciais de caixa, sem EWS. Anexos ficam no S3 prontos para processar.", required: false,
+                notes: "Se a caixa precisar continuar no Exchange Online/M365, use Microsoft Graph (EWS está sendo desligado) a partir de uma Lambda agendada pelo EventBridge, com o segredo do app no Secrets Manager; ou configure uma regra de encaminhamento da caixa para o endereço do SES.");
+            foreach (var (pr, _) in mailboxProjects) inbound.UsedBy.Add(pr.Project.Name);
         }
 
         // Messaging
@@ -277,10 +350,13 @@ public static class AwsArchitect
         }
 
         // Secrets
-        if (projects.Any(p => p.Profile.Has(Signal.SecretsInConfig) || p.Profile.Databases.Count > 0))
+        if (projects.Any(p => p.Profile.HasAny(Signal.SecretsInConfig, Signal.SecretsInCode) || p.Profile.Databases.Count > 0))
         {
-            var sm = Component("secrets", "AWS Secrets Manager", "Senhas de banco, chaves de API, credenciais SMTP", "senhas no web.config/app.config", "Injeção na task definition (valueFrom) sem passar pela imagem; rotação automática para RDS.", notes: "Combine com IAM task roles: nenhuma access key no código.");
-            foreach (var (pr, p) in projects.Where(p => p.Profile.Has(Signal.SecretsInConfig) || p.Profile.Databases.Count > 0)) sm.UsedBy.Add(pr.Project.Name);
+            var inCode = projects.Any(p => p.Profile.Has(Signal.SecretsInCode));
+            var sm = Component("secrets", "AWS Secrets Manager", "Senhas de banco, chaves de API, credenciais SMTP",
+                inCode ? "senhas no web.config/app.config e credenciais embutidas no código" : "senhas no web.config/app.config",
+                "Injeção na task definition (valueFrom) sem passar pela imagem; rotação automática para RDS.", notes: "Combine com IAM task roles: nenhuma access key no código.");
+            foreach (var (pr, p) in projects.Where(p => p.Profile.HasAny(Signal.SecretsInConfig, Signal.SecretsInCode) || p.Profile.Databases.Count > 0)) sm.UsedBy.Add(pr.Project.Name);
         }
 
         // Scheduling
@@ -338,7 +414,7 @@ public static class AwsArchitect
 
     private static int Order(string id) => id switch
     {
-        "vpc" => 0, "alb" => 1, "cloudfront" => 2, "route53" => 3, "ecs" => 4, "ec2" => 5, "ecr" => 6, "eventbridge" => 7, "sqs" => 8, "amazonmq" => 9, "msk" => 10,
+        "vpc" => 0, "alb" => 1, "cloudfront" => 2, "route53" => 3, "ecs" => 4, "lambda" => 4, "ec2" => 5, "ecr" => 6, "eventbridge" => 7, "s3-events" => 7, "ses-inbound" => 7, "storage-gateway" => 16, "sqs" => 8, "amazonmq" => 9, "msk" => 10,
         _ when id.StartsWith("rds") => 11, "documentdb" => 12, "opensearch" => 13, "elasticache" => 14, "s3" => 15, "efs" => 16, "transfer" => 17, "ses" => 18,
         "cognito" => 19, "secrets" => 20, "ssm" => 21, "cloudwatch" => 22, "vpn" => 23, "cicd" => 24, _ => 50
     };
@@ -370,6 +446,9 @@ public static class AwsArchitect
                 if (p.Has(Signal.Scheduler)) traits.Add("agendador (" + string.Join("/", p.Get(Signal.Scheduler)!.Details.Take(2)) + ")");
                 if (p.Has(Signal.Msmq)) traits.Add("consome MSMQ");
                 if (p.Has(Signal.RabbitMq)) traits.Add("consome RabbitMQ");
+                if (p.Has(Signal.MailboxReading)) traits.Add("lê caixa de e-mail (" + string.Join("/", p.Get(Signal.MailboxReading)!.Details.Take(2).DefaultIfEmpty("IMAP/EWS")) + ")");
+                if (p.Has(Signal.FileWatcher)) traits.Add("monitora pasta de entrada");
+                if (p.Has(Signal.SpreadsheetFiles)) traits.Add("processa planilhas/CSV");
             }
             if (p.Databases.Count > 0) traits.Add("acessa " + string.Join(", ", p.Databases.Select(d => $"{d.Provider} ({d.Database ?? d.Name})").Distinct().Take(3)));
             if (p.Has(Signal.Smtp)) traits.Add("envia e-mail por SMTP");
@@ -404,6 +483,8 @@ public static class AwsArchitect
             p.Add("2. Dados: provisionar o RDS, migrar com restore nativo (.bak via S3) ou AWS DMS com replicação contínua; trocar Integrated Security por autenticação SQL com segredo no Secrets Manager; validar Encrypt/TLS e collation.");
         p.Add($"{(components.Keys.Any(k => k.StartsWith("rds")) ? 3 : 2)}. Aplicação: compilar a saída do Migrator, resolver os itens bloqueantes do inventário, construir a imagem com o Dockerfile gerado, externalizar estado (sessão → ElastiCache, Data Protection → SSM, arquivos → S3), logs em stdout, segredos via task definition. Rodar os testes no pipeline.");
         var integrations = new List<string>();
+        if (projects.Any(x => x.Profile.Has(Signal.MailboxReading))) integrations.Add("leitura de caixa postal → SES recebimento ou Microsoft Graph (EWS em desligamento)");
+        if (projects.Any(x => x.Profile.Has(Signal.FileWatcher))) integrations.Add("monitoramento de pasta → S3 Event Notifications (File Gateway para as pastas de rede)");
         if (projects.Any(x => x.Profile.Has(Signal.Msmq))) integrations.Add("MSMQ → SQS");
         if (projects.Any(x => x.Profile.Has(Signal.Smtp))) integrations.Add("SMTP → SES");
         if (projects.Any(x => x.Profile.HasAny(Signal.Scheduler, Signal.TimerLoop))) integrations.Add("timers → EventBridge Scheduler");
@@ -434,8 +515,8 @@ public static class AwsArchitect
             r.Add("Modelos EDMX: o EF Designer não funciona em projetos SDK-style; alterações de modelo exigem scaffold para EF Core.");
         if (projects.Any(p => p.Profile.HasAny(Signal.LargeUploads, Signal.LongRequests)))
             r.Add("Uploads grandes/requisições longas: ALB idle timeout de 60 s e memória da task; usar URLs pré-assinadas do S3 e processamento assíncrono.");
-        if (projects.Any(p => p.Profile.Has(Signal.SecretsInConfig)))
-            r.Add("Segredos em texto claro iriam parar na imagem Docker e no repositório: bloqueie no pipeline (git-secrets/trufflehog) e mova para o Secrets Manager antes do primeiro build.");
+        if (projects.Any(p => p.Profile.HasAny(Signal.SecretsInConfig, Signal.SecretsInCode)))
+            r.Add("Segredos em texto claro" + (projects.Any(p => p.Profile.Has(Signal.SecretsInCode)) ? " (inclusive embutidos no código C#)" : "") + " iriam parar na imagem Docker e no repositório: bloqueie no pipeline (git-secrets/trufflehog), mova para o Secrets Manager antes do primeiro build e rotacione o que já vazou.");
         var licenses = allProjects.SelectMany(p => p.Result.Modernizations).Where(m => m.Kind == ModernizationKind.License).Select(m => m.Title).Distinct().ToList();
         if (licenses.Count > 0) r.Add("Bibliotecas que viraram pagas (" + licenses.Count + "): decidir entre pagar, congelar versão ou substituir antes de escalar para as demais aplicações do portfólio.");
     }
@@ -450,6 +531,8 @@ public static class AwsArchitect
             c.Add("RDS for SQL Server: a licença inclusa domina o custo (Standard ≈ 2-3x o preço de um RDS PostgreSQL equivalente). Vários bancos pequenos cabem numa instância; Express é gratuito em licença até 10 GB por banco; Babelfish for Aurora PostgreSQL elimina a licença mantendo T-SQL.");
         if (deployables.Any(d => d.Result.Hosting!.Primary == AwsHosting.EcsScheduledTask))
             c.Add("Tarefas agendadas pagam só o tempo de execução (em vez de um Windows Service 24x7).");
+        if (deployables.Any(d => d.Result.Hosting!.Primary == AwsHosting.Lambda))
+            c.Add("Lambda: automações que processam poucos milhares de eventos por mês costumam caber no nível gratuito (1 M de invocações e 400 mil GB-s); o custo relevante passa a ser o S3/SES e o RDS.");
         c.Add("NAT Gateway tem custo fixo por hora + por GB; VPC endpoints para S3/ECR/CloudWatch/Secrets Manager evitam a maior parte do tráfego.");
         c.Add("CloudWatch Logs: defina retenção e evite logs em nível Debug em produção; o custo de ingestão (por GB) surpreende em aplicações verbosas.");
         if (components.ContainsKey("elasticache")) c.Add("ElastiCache Serverless cobra por GB-hora e requisições — adequado para sessão/cache de aplicações pequenas; um único cluster pode servir várias aplicações (separe por prefixo/DB).");
@@ -465,10 +548,13 @@ public static class AwsArchitect
 
         sb.AppendLine("    subgraph aws[AWS - VPC]");
         sb.AppendLine("        direction LR");
-        if (deployables.Count > 0)
+        var containerized = deployables.Where(d => d.Result.Hosting!.Primary != AwsHosting.Lambda).ToList();
+        foreach (var (pr, _) in deployables.Where(d => d.Result.Hosting!.Primary == AwsHosting.Lambda))
+            sb.AppendLine($"        {Id(pr.Project.Name)}[\"{pr.Project.Name}<br/>Lambda\"]");
+        if (containerized.Count > 0)
         {
             sb.AppendLine("        subgraph ecs[Amazon ECS]");
-            foreach (var (pr, _) in deployables)
+            foreach (var (pr, _) in containerized)
             {
                 var label = pr.Hosting!.Primary switch
                 {
@@ -487,7 +573,7 @@ public static class AwsArchitect
         foreach (var id in new[] { "rds-sqlserver", "rds-oracle", "rds-mysql", "rds-postgres", "rds-other", "documentdb", "opensearch", "elasticache", "efs" }.Where(components.ContainsKey))
             sb.AppendLine($"        {Id(id)}[({ShortName(components[id])})]");
         sb.AppendLine("    end");
-        foreach (var id in new[] { "s3", "sqs", "amazonmq", "msk", "ses", "eventbridge", "secrets", "ssm", "cloudwatch", "cognito", "transfer" }.Where(components.ContainsKey))
+        foreach (var id in new[] { "s3", "s3-events", "storage-gateway", "sqs", "amazonmq", "msk", "ses", "ses-inbound", "eventbridge", "secrets", "ssm", "cloudwatch", "cognito", "transfer" }.Where(components.ContainsKey))
             sb.AppendLine($"    {Id(id)}[{ShortName(components[id])}]");
         if (components.ContainsKey("vpn"))
         {
@@ -522,7 +608,13 @@ public static class AwsArchitect
                 if (pr.Project.Kind == ProjectKind.Web) sb.AppendLine($"    {node} -- publica --> sqs");
                 else if (pr.Hosting!.Primary == AwsHosting.EcsFargateWorker || p.HasAny(Signal.Msmq, Signal.MessageBusFramework)) sb.AppendLine($"    sqs -- consome --> {node}");
             }
-            if (components.ContainsKey("eventbridge") && (pr.Hosting!.Primary == AwsHosting.EcsScheduledTask || p.HasAny(Signal.Scheduler, Signal.TimerLoop))) sb.AppendLine($"    eventbridge -- agenda --> {node}");
+            if (components.ContainsKey("eventbridge") && (pr.Hosting!.Primary == AwsHosting.EcsScheduledTask || (pr.Hosting!.Primary != AwsHosting.Lambda && p.HasAny(Signal.Scheduler, Signal.TimerLoop)))) sb.AppendLine($"    eventbridge -- agenda --> {node}");
+            if (components.ContainsKey("s3-events") && pr.Project.Kind != ProjectKind.Web && (p.Has(Signal.FileWatcher) || pr.Hosting!.Primary == AwsHosting.Lambda || p.Has(Signal.SpreadsheetFiles)))
+            {
+                sb.AppendLine($"    s3 -- ObjectCreated --> s3_events -- dispara --> {node}");
+                if (components.ContainsKey("storage-gateway") && p.HasAny(Signal.UncPaths, Signal.WindowsPaths)) sb.AppendLine($"    storage_gateway -- SMB → S3 --> s3");
+            }
+            if (components.ContainsKey("ses-inbound") && p.Has(Signal.MailboxReading)) sb.AppendLine($"    ses_inbound -- e-mail recebido --> {node}");
             if (components.ContainsKey("cognito") && pr.Project.Kind == ProjectKind.Web && p.HasAny(Signal.FormsAuth, Signal.Membership, Signal.Identity2, Signal.OwinOAuth, Signal.WindowsAuth, Signal.ActiveDirectory)) sb.AppendLine($"    {node} -.-> cognito");
             if (components.ContainsKey("vpn"))
                 foreach (var h in p.ExternalEndpoints.Select(HostOf).Where(ModernizationAdvisor.IsInternalHost).Distinct(StringComparer.OrdinalIgnoreCase).Take(3))
@@ -537,7 +629,7 @@ public static class AwsArchitect
     {
         "rds-sqlserver" => "RDS SQL Server", "rds-oracle" => "RDS Oracle", "rds-mysql" => "Aurora MySQL", "rds-postgres" => "Aurora PostgreSQL", "rds-other" => "RDS",
         "documentdb" => "DocumentDB", "opensearch" => "OpenSearch", "elasticache" => "ElastiCache", "efs" => "EFS", "s3" => "S3", "sqs" => "SQS / SNS", "amazonmq" => "Amazon MQ", "msk" => "MSK",
-        "ses" => "SES", "eventbridge" => "EventBridge Scheduler", "secrets" => "Secrets Manager", "ssm" => "Parameter Store", "cloudwatch" => "CloudWatch", "cognito" => "Cognito", "transfer" => "Transfer Family",
+        "ses" => "SES", "ses-inbound" => "SES recebimento", "s3-events" => "S3 Events → SQS", "storage-gateway" => "File Gateway", "lambda" => "Lambda", "eventbridge" => "EventBridge Scheduler", "secrets" => "Secrets Manager", "ssm" => "Parameter Store", "cloudwatch" => "CloudWatch", "cognito" => "Cognito", "transfer" => "Transfer Family",
         _ => c.Service
     };
 

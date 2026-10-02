@@ -85,6 +85,28 @@ public static class ModernizationRules
             "A versão gratuita tem limites de operações/registros; uso corporativo exige licença.",
             "Confirme a licença ou migre para ASP.NET Core Minimal APIs / controllers (System.Text.Json, OpenAPI nativo)."),
 
+        // ---- Mailbox automations ----
+        ["Microsoft.Exchange.WebServices"] = Deprecated("MOD-PKG-EWS", Impact.High, Effort.High,
+            "EWS Managed API: a Microsoft está desligando o EWS no Exchange Online",
+            "A Microsoft começou a bloquear chamadas EWS no Exchange Online em outubro de 2026 e o pacote não recebe manutenção desde 2015 (só .NET Framework; funciona no .NET 10 via compatibilidade, com NU1701). Automações que leem caixas postais por EWS vão parar de funcionar.",
+            "Microsoft Graph (pacote Microsoft.Graph, autenticação de aplicativo com Microsoft.Identity.Client; permissão Mail.Read restrita à caixa por Application Access Policy). Alternativa sem código específico de Microsoft: se a caixa puder ter o domínio apontado para a AWS, receba por Amazon SES (regras de recebimento → S3 → SQS/Lambda) e elimine o polling.",
+            "Amazon SES (recebimento) / EventBridge Scheduler"),
+        ["Exchange.WebServices.Managed.Api"] = Deprecated("MOD-PKG-EWS", Impact.High, Effort.High,
+            "EWS Managed API: a Microsoft está desligando o EWS no Exchange Online", "Bloqueio no Exchange Online a partir de outubro de 2026.", "Microsoft Graph ou recebimento por Amazon SES → S3.", "Amazon SES (recebimento)"),
+        ["OpenPop.NET"] = Deprecated("MOD-PKG-OPENPOP", Impact.Medium, Effort.Medium,
+            "OpenPop.NET está descontinuado", "Sem releases desde 2015, só POP3 e sem OAuth2 (exigido pelo Exchange Online/Gmail).",
+            "MailKit (IMAP/POP3 com OAuth2) ou Microsoft Graph para Exchange Online."),
+        ["S22.Imap"] = Deprecated("MOD-PKG-S22IMAP", Impact.Medium, Effort.Medium,
+            "S22.Imap está descontinuado", "Sem manutenção desde 2015 e sem OAuth2.", "MailKit (ImapClient com SASL XOAUTH2)."),
+        ["AE.Net.Mail"] = Deprecated("MOD-PKG-AENETMAIL", Impact.Medium, Effort.Medium,
+            "AE.Net.Mail está descontinuado", "Sem manutenção; sem OAuth2.", "MailKit."),
+        ["Limilabs.Mail"] = License("MOD-PKG-LIMILABS", Impact.Medium, Effort.Medium,
+            "Mail.dll (Limilabs) é comercial", "Licença por desenvolvedor/servidor; verifique se cobre containers.", "MailKit (MIT) cobre IMAP/POP3/SMTP com OAuth2."),
+        ["Microsoft.Graph"] = Modernize("MOD-PKG-GRAPH", Impact.Low, Effort.Low,
+            "Microsoft Graph SDK: atualize para a v5 e use credenciais de aplicativo",
+            "Versões antigas do SDK (v1-v4) têm API diferente; em containers a autenticação deve ser client credentials com segredo/certificado fora do código.",
+            "Microsoft.Graph 5.x + Azure.Identity ClientSecretCredential (segredo no AWS Secrets Manager); limite o escopo com Application Access Policy.", "AWS Secrets Manager"),
+
         // ---- Discontinued ----
         ["Topshelf"] = Deprecated("MOD-PKG-TOPSHELF", Impact.Medium, Effort.Medium,
             "Topshelf está descontinuado",

@@ -27,7 +27,7 @@ public sealed class SampleSolutionTests : IDisposable
             InputPath = SampleSolution(), DryRun = true, Offline = true, ReportDir = reportDir
         });
 
-        Assert.Equal(["LegacyShop.Web", "LegacyShop.Core", "LegacyShop.Worker", "LegacyShop.Tests"], result.Projects.Select(p => p.Project.Name));
+        Assert.Equal(["LegacyShop.Web", "LegacyShop.Core", "LegacyShop.Worker", "LegacyShop.Tests", "LegacyShop.Importador"], result.Projects.Select(p => p.Project.Name));
         Assert.Contains(result.GlobalItems, i => i.RuleId == "SLN-SKIPPED" && i.Title.Contains(".vbproj"));
         Assert.Null(result.OutputDir);
 
@@ -51,7 +51,9 @@ public sealed class SampleSolutionTests : IDisposable
         Assert.Contains(web.Modernizations, m => m.RuleId == "MOD-PKG-ITEXTSHARP");
         Assert.Contains(web.Modernizations, m => m.RuleId == "MOD-ARCH-SESSION");
         Assert.Contains(web.Modernizations, m => m.RuleId == "MOD-CS-STATIC-STATE");   // static List<Pedido> in PedidosController
-        Assert.Contains(web.Modernizations, m => m.RuleId == "MOD-SEC-SECRETS");
+        Assert.Contains(web.Modernizations, m => m.RuleId == "MOD-SEC-SECRETS" && m.Evidence!.Contains("network/@password"));
+        Assert.Contains(web.Modernizations, m => m.RuleId == "MOD-SEC-SECRETS-CODE" && m.Evidence!.Contains("TokenIntegracaoErp"));
+        Assert.Contains(web.Inventory, i => i.RuleId == "CFG-SECRETS" && i.Suggestion.Contains("Secrets Manager"));
         Assert.Contains(worker.Modernizations, m => m.RuleId == "MOD-WIN-SERVICE");
         Assert.Contains(worker.Modernizations, m => m.RuleId == "MOD-ARCH-DB-INTEGRATED");
         Assert.Contains(worker.Modernizations, m => m.RuleId == "MOD-ARCH-HYBRID" && m.Evidence!.Contains("erp.interno"));
@@ -63,12 +65,28 @@ public sealed class SampleSolutionTests : IDisposable
         Assert.Equal(AwsHosting.EcsScheduledTask, worker.Hosting!.Primary);
         Assert.Equal(AwsHosting.NotDeployable, result.Projects[1].Hosting!.Primary);
 
+        // Back-office automation (console run by Task Scheduler: folder + mailbox + SQL) → Lambda with event triggers
+        var importador = result.Projects[4];
+        Assert.Equal(ProjectKind.Console, importador.Project.Kind);
+        Assert.Equal(AwsHosting.Lambda, importador.Hosting!.Primary);
+        Assert.Contains(importador.Hosting.Rationale, r => r.Contains("S3 Event Notifications") && r.Contains("SES"));
+        Assert.Contains(importador.Hosting.Prerequisites, p => p.Contains("EWS"));
+        Assert.Contains(importador.Modernizations, m => m.RuleId == "MOD-PKG-EWS");
+        Assert.Contains(importador.Modernizations, m => m.RuleId == "MOD-ARCH-MAILBOX");
+        Assert.Contains(importador.Modernizations, m => m.RuleId == "MOD-SEC-SECRETS" && m.Evidence!.Contains("CaixaPostalSenha"));
+        Assert.Contains(importador.Modernizations, m => m.RuleId == "MOD-CS-PARSE-CULTURE");
+        Assert.Contains(importador.Inventory, i => i.RuleId == "AWS-LAMBDA");
+
         var arch = result.Architecture!;
         var services = arch.Components.Select(c => c.Id).ToList();
-        foreach (var id in new[] { "ecs", "ecr", "alb", "rds-sqlserver", "s3", "ses", "elasticache", "secrets", "ssm", "cloudwatch", "eventbridge", "vpn", "cicd" })
+        foreach (var id in new[] { "ecs", "ecr", "alb", "rds-sqlserver", "s3", "ses", "elasticache", "secrets", "ssm", "cloudwatch", "eventbridge", "vpn", "cicd", "lambda", "s3-events", "storage-gateway", "ses-inbound" })
             Assert.Contains(id, services);
-        Assert.Equal(["LegacyShop.Web", "LegacyShop.Worker"], arch.Components.Single(c => c.Id == "ses").UsedBy);
+        Assert.Equal(["LegacyShop.Importador"], arch.Components.Single(c => c.Id == "lambda").UsedBy);
+        Assert.Contains("LegacyShop_Importador", arch.Diagram);
+        Assert.Contains("ses_inbound -- e-mail recebido --> LegacyShop_Importador", arch.Diagram);
+        Assert.Equal(["LegacyShop.Importador", "LegacyShop.Web", "LegacyShop.Worker"], arch.Components.Single(c => c.Id == "ses").UsedBy); // Importador ships Core, which sends e-mail
         Assert.Contains("erp.interno", arch.Components.Single(c => c.Id == "vpn").Replaces);
+        Assert.Contains("embutidas no código", arch.Components.Single(c => c.Id == "secrets").Replaces);
         Assert.Contains("LegacyShop_Web --> rds_sqlserver", arch.Diagram);
         Assert.Contains("eventbridge -- agenda --> LegacyShop_Worker", arch.Diagram);
         Assert.Contains("ECS Fargate (Linux) + ALB", arch.Summary);
@@ -131,6 +149,9 @@ public sealed class SampleSolutionTests : IDisposable
         Assert.True(Exists("LegacyShop.Web/Dockerfile"));
         Assert.True(Exists("LegacyShop.Worker/Dockerfile"));
         Assert.False(Exists("LegacyShop.Core/Dockerfile"));
+        Assert.False(Exists("LegacyShop.Importador/Dockerfile")); // Lambda: packaged with Amazon.Lambda.Tools instead
+        Assert.True(Exists("LegacyShop.Importador/LegacyShop.Importador.csproj"));
+        Assert.Contains("<PackageReference Include=\"CsvHelper\"", Read("LegacyShop.Importador/LegacyShop.Importador.csproj"));
         Assert.True(Exists(".dockerignore"));
         Assert.Contains("mcr.microsoft.com/dotnet/aspnet:10.0 AS final", Read("LegacyShop.Web/Dockerfile"));
         Assert.Contains("app.MapHealthChecks(\"/health\")", Read("LegacyShop.Web/Program.cs"));

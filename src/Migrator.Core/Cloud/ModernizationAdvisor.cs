@@ -107,6 +107,31 @@ public static class ModernizationAdvisor
                 merged, "Amazon S3");
         }
 
+        if (p.Get(Signal.MailboxReading) is { } mailbox)
+        {
+            var ews = mailbox.Details.Any(d => d.Contains("Exchange", StringComparison.OrdinalIgnoreCase)) || mailbox.Locations.Count > 0 && p.Packages.Any(x => x.Contains("Exchange", StringComparison.OrdinalIgnoreCase));
+            yield return Item("MOD-ARCH-MAILBOX", ModernizationKind.Cloud, Impact.High, Effort.Medium,
+                "Leitura de caixa de e-mail → Amazon SES (recebimento) ou Microsoft Graph",
+                "A automação faz polling de uma caixa postal" + (ews ? " via EWS, que a Microsoft está desligando no Exchange Online (bloqueio a partir de outubro de 2026)" : "") +
+                ". Em container/Lambda isso exige credenciais da caixa (no Secrets Manager), tratamento de duplicidade e um agendamento; e-mails com anexos grandes consomem memória do processo.",
+                "Preferido: apontar um (sub)domínio para o Amazon SES e receber por regra → S3 → SQS/Lambda: sem polling, sem senha de caixa, anexos já no S3. Se a caixa tiver que ficar no M365: Microsoft Graph (client credentials, Mail.Read com Application Access Policy) chamado por uma Lambda agendada no EventBridge; ou regra de encaminhamento da caixa para o SES.",
+                mailbox, "Amazon SES (recebimento)");
+        }
+
+        if (p.Get(Signal.FileWatcher) is { } watcher)
+            yield return Item("MOD-ARCH-FILEWATCHER", ModernizationKind.Cloud, Impact.High, Effort.Medium,
+                "FileSystemWatcher / varredura de pasta → S3 Event Notifications",
+                "Não há pasta a observar em Lambda nem disco compartilhado em Fargate; FileSystemWatcher em pastas de rede (SMB) já era pouco confiável (eventos perdidos, arquivo ainda em cópia).",
+                "Arquivos entram num bucket S3 (produtores gravam direto, via AWS Transfer Family ou via Storage Gateway File Gateway que expõe a mesma pasta SMB); o evento ObjectCreated vai para uma fila SQS que dispara a Lambda/worker. Mova o arquivo para um prefixo 'processados/' ao concluir.",
+                watcher, "Amazon S3 Event Notifications");
+
+        if (hosted && p.Get(Signal.OfficeOleDb) is { } oledb)
+            yield return Item("MOD-WIN-OLEDB", ModernizationKind.Cloud, Impact.High, Effort.Medium,
+                "Leitura de Excel/Access via OLE DB (ACE/Jet)",
+                "O provider Microsoft.ACE.OLEDB só existe no Windows com o Access Database Engine instalado (e com a arquitetura 32/64 bits certa); impede containers Linux e Lambda.",
+                "Excel: ExcelDataReader (xls/xlsx, MIT) ou ClosedXML (xlsx); CSV: CsvHelper. Access (.mdb/.accdb): exporte os dados para o RDS ou leia com um conversor fora do processo.",
+                oledb, "Amazon ECS (Linux) / AWS Lambda");
+
         if (p.Get(Signal.Ftp) is { } ftp)
             yield return Item("MOD-ARCH-FTP", ModernizationKind.Cloud, Impact.Medium, Effort.Medium,
                 "FTP → AWS Transfer Family / S3",
@@ -224,6 +249,13 @@ public static class ModernizationAdvisor
                 $"Credenciais em texto claro ({string.Join(", ", secrets.Details.Take(5))}) foram copiadas para o appsettings.json e acabariam na imagem Docker/repositório.",
                 "Remova do appsettings.json; injete via Secrets Manager (secrets na task definition do ECS ou Amazon.Extensions.Configuration.SystemsManager no IConfiguration). Para o RDS, prefira autenticação IAM ou rotação automática do Secrets Manager.",
                 secrets, "AWS Secrets Manager");
+
+        if (p.Get(Signal.SecretsInCode) is { } codeSecrets)
+            yield return Item("MOD-SEC-SECRETS-CODE", ModernizationKind.Security, Impact.High, Effort.Low,
+                "Credenciais embutidas no código-fonte → AWS Secrets Manager",
+                $"Senhas, chaves de API ou tokens aparecem como literais no C# ({string.Join(", ", codeSecrets.Details.Take(4))}). Vão para o repositório, para a imagem Docker e não podem ser rotacionados sem novo deploy.",
+                "Leia de IConfiguration (injetado) e alimente via Secrets Manager na task definition do ECS ou Amazon.Extensions.Configuration.SystemsManager; para serviços AWS use a task role (sem access keys). Rotacione as credenciais expostas.",
+                codeSecrets, "AWS Secrets Manager");
 
         if (p.Get(Signal.FileLogging) is { } fileLog && !p.Packages.Contains("log4net") && !p.Packages.Contains("NLog") && !p.Packages.Contains("Serilog.Sinks.File"))
             yield return Item("MOD-ARCH-LOGFILES", ModernizationKind.Cloud, Impact.Medium, Effort.Low,

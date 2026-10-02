@@ -197,6 +197,52 @@ public class ModernizationAndCloudTests
     }
 
     [Fact]
+    public void Profiler_finds_credentials_in_any_config_section_and_in_code()
+    {
+        const string config = """
+            <configuration>
+              <system.web>
+                <identity impersonate="true" userName="DOMINIO\svc" password="Imp3rs0na!" />
+                <sessionState mode="SQLServer" sqlConnectionString="Data Source=srv;User Id=sess;Password=S3ss!" />
+                <machineKey validationKey="A1B2C3D4E5F6" decryptionKey="F6E5D4C3B2A1" validation="SHA1" />
+              </system.web>
+              <system.net><mailSettings><smtp><network host="smtp.interno" userName="loja" password="SmtpSenha!" /></smtp></mailSettings></system.net>
+              <pagamentos gateway="X" apiKey="sk_live_abc" chaveSecreta="segredo-123" />
+            </configuration>
+            """;
+        const string code = """
+            public static class Integracao
+            {
+                public const string TokenErp = "erp-9f3b2c1d-token-legado";
+                private static readonly string Conexao = "Server=srv;Database=db;User Id=app;Password=Senha@123;";
+                private const string AwsKey = "AKIAIOSFODNN7EXAMPLE";
+                private const string Modelo = "Password={0}"; // template, não é segredo
+                public string Senha { get; set; } // propriedade, não é literal
+            }
+            """;
+        var project = Project("Web", ProjectKind.Web);
+        var profile = Profile(project, code, config);
+
+        var inConfig = profile.Get(Signal.SecretsInConfig)!;
+        foreach (var expected in new[] { "identity/@password", "sessionState/@sqlConnectionString", "machineKey/@validationKey", "network/@password", "pagamentos/@apiKey", "pagamentos/@chaveSecreta" })
+            Assert.Contains(expected, inConfig.Details);
+
+        var inCode = profile.Get(Signal.SecretsInCode)!;
+        Assert.Equal(3, inCode.Count);
+        Assert.Contains("TokenErp", inCode.Details);
+        Assert.Contains("AKIAIOSFODNN7EXAMPLE", inCode.Details);
+
+        var items = ModernizationAdvisor.Analyze(project, profile, [("Integracao.cs", code)], CloudTarget.Aws);
+        var item = Assert.Single(items, i => i.RuleId == "MOD-SEC-SECRETS-CODE");
+        Assert.Equal(ModernizationKind.Security, item.Kind);
+        Assert.Equal("AWS Secrets Manager", item.AwsService);
+        Assert.Contains(items, i => i.RuleId == "MOD-SEC-SECRETS");
+
+        var rec = AwsArchitect.Recommend(project, profile);
+        Assert.Contains(rec.Prerequisites, p => p.Contains("credenciais embutidas no código"));
+    }
+
+    [Fact]
     public void Profiler_parses_ef6_entity_connection_strings()
     {
         var db = ApplicationProfiler.ParseConnectionString("Entities",
@@ -310,6 +356,64 @@ public class ModernizationAndCloudTests
         var desktop = Project("Desk", ProjectKind.Desktop);
         desktop.UsesWinForms = true;
         Assert.Equal(AwsHosting.Desktop, AwsArchitect.Recommend(desktop, Profile(desktop, "")).Primary);
+    }
+
+    [Fact]
+    public void Event_driven_automation_without_windows_dependencies_becomes_lambda()
+    {
+        const string code = """
+            using Microsoft.Exchange.WebServices.Data;
+            using CsvHelper;
+            class Importador
+            {
+                static void Main()
+                {
+                    var service = new ExchangeService();
+                    var itens = service.FindItems(WellKnownFolderName.Inbox, new ItemView(10));
+                    foreach (var f in System.IO.Directory.GetFiles(@"\\arquivos\entrada", "*.csv")) { var csv = new CsvReader(new System.IO.StreamReader(f)); System.IO.File.Move(f, f + ".ok"); }
+                    System.Diagnostics.EventLog.WriteEntry("Importador", "ok");
+                }
+            }
+            """;
+        var console = Project("Importador", ProjectKind.Console, "Microsoft.Exchange.WebServices", "CsvHelper");
+        var profile = Profile(console, code);
+        Assert.True(profile.Has(Signal.MailboxReading));
+        Assert.True(profile.Has(Signal.SpreadsheetFiles));
+
+        var rec = AwsArchitect.Recommend(console, profile);
+        Assert.Equal(AwsHosting.Lambda, rec.Primary);                       // EventLog is tolerated: it must go anyway
+        Assert.Contains(rec.Rationale, r => r.Contains("SES") && r.Contains("S3 Event Notifications"));
+        Assert.Contains(rec.Prerequisites, p => p.Contains("handler Lambda"));
+        Assert.Contains(rec.Prerequisites, p => p.Contains("EWS"));
+        Assert.Contains(rec.Alternatives, a => a.Contains("ECS Fargate agendada"));
+
+        // Same automation with Quartz inside → scheduled ECS task, with a hint that the event trigger would be better
+        var withQuartz = Project("Importador", ProjectKind.Console, "Microsoft.Exchange.WebServices", "CsvHelper", "Quartz");
+        var scheduled = AwsArchitect.Recommend(withQuartz, Profile(withQuartz, code + "\nclass J { Quartz.IScheduler s; }"));
+        Assert.Equal(AwsHosting.EcsScheduledTask, scheduled.Primary);
+        Assert.Contains(scheduled.Rationale, r => r.Contains("agendador embutido"));
+
+        // ACE OLE DB (Excel via Jet) is a hard Windows dependency
+        var oledb = Project("Planilhas", ProjectKind.Console);
+        var oledbRec = AwsArchitect.Recommend(oledb, Profile(oledb, """class P { void M() { var c = new System.Data.OleDb.OleDbConnection("Provider=Microsoft.ACE.OLEDB.12.0;Data Source=x.xlsx"); } }"""));
+        Assert.Equal(AwsHosting.EcsWindows, oledbRec.Primary);
+        Assert.Contains(oledbRec.HardWindowsDependencies, d => d.Contains("ACE/Jet"));
+    }
+
+    [Fact]
+    public void Binding_redirect_public_key_tokens_are_not_secrets()
+    {
+        const string config = """
+            <configuration>
+              <runtime>
+                <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+                  <dependentAssembly><assemblyIdentity name="Newtonsoft.Json" publicKeyToken="30ad4fe6b2a6aeed" /><bindingRedirect oldVersion="0.0.0.0-12.0.0.0" newVersion="12.0.0.0" /></dependentAssembly>
+                </assemblyBinding>
+              </runtime>
+            </configuration>
+            """;
+        var project = Project("Web", ProjectKind.Web);
+        Assert.False(Profile(project, "class A { }", config).Has(Signal.SecretsInConfig));
     }
 
     // ------------------------------------------------------------------ Dockerfile

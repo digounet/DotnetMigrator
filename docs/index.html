@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Migrator — .NET Framework → .NET 10 na AWS</title>
+<meta name="description" content="CLI que migra aplicações .NET Framework para .NET 10, sugere modernizações e propõe a arquitetura alvo na AWS, com assistência opcional de LLM.">
+<style>
+  :root {
+    --bg: #f8f9fa; --fg: #202124; --muted: #5f6368; --border: #dadce0; --card: #fff;
+    --brand: #1a3a6b; --brand-2: #1967d2; --green: #137333; --green-bg: #e6f4ea; --amber: #b06000; --amber-bg: #fef7e0;
+    --red: #c5221f; --red-bg: #fce8e6; --purple: #6a1b9a; --purple-bg: #f3e8fb; --code: #f1f3f4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #121417; --fg: #e8eaed; --muted: #9aa0a6; --border: #3c4043; --card: #1e2124;
+      --brand: #0f2a52; --brand-2: #8ab4f8; --green: #81c995; --green-bg: #1e3a28; --amber: #fdd663; --amber-bg: #3d2e0a;
+      --red: #f28b82; --red-bg: #3c1f1e; --purple: #d7aefb; --purple-bg: #2e1f3a; --code: #2a2d31;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 "Segoe UI", system-ui, -apple-system, sans-serif; }
+  a { color: var(--brand-2); }
+  header.hero { background: var(--brand); color: #fff; padding: 56px 16px 48px; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 16px; }
+  .hero h1 { font-size: clamp(28px, 5vw, 44px); margin: 0 0 12px; font-weight: 700; letter-spacing: -.01em; }
+  .hero p.lead { font-size: clamp(16px, 2.4vw, 20px); max-width: 780px; margin: 0 0 24px; opacity: .95; }
+  .hero .cta a { display: inline-block; padding: 12px 20px; border-radius: 8px; font-weight: 600; text-decoration: none; margin: 6px 10px 6px 0; }
+  .hero .cta .primary { background: #fff; color: var(--brand); }
+  .hero .cta .secondary { border: 2px solid rgba(255,255,255,.7); color: #fff; }
+  .hero .pill { display: inline-block; background: rgba(255,255,255,.14); padding: 4px 10px; border-radius: 999px; font-size: 13px; margin-bottom: 18px; }
+  main { padding: 16px 0 64px; }
+  section { margin: 40px 0; }
+  h2 { font-size: 26px; margin: 0 0 8px; }
+  h3 { font-size: 18px; margin: 24px 0 8px; }
+  p.sub { color: var(--muted); margin: 0 0 20px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .card h3 { margin: 0 0 8px; font-size: 17px; }
+  .card p { margin: 0; color: var(--muted); font-size: 15px; }
+  .card .tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; margin-bottom: 10px; }
+  .tag.green { background: var(--green-bg); color: var(--green); } .tag.amber { background: var(--amber-bg); color: var(--amber); }
+  .tag.purple { background: var(--purple-bg); color: var(--purple); } .tag.blue { background: var(--code); color: var(--brand-2); }
+  table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; font-size: 15px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { background: var(--code); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  tr:last-child td { border-bottom: 0; }
+  .table-wrap { overflow-x: auto; }
+  pre { background: var(--code); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; overflow: auto; font-size: 13.5px; line-height: 1.5; }
+  code { font-family: Consolas, "Cascadia Mono", ui-monospace, monospace; }
+  p code, li code, td code { background: var(--code); padding: 1px 6px; border-radius: 5px; font-size: 90%; }
+  .pipeline { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; counter-reset: step; }
+  .pipeline div { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; font-size: 14px; position: relative; padding-left: 44px; }
+  .pipeline div::before { counter-increment: step; content: counter(step); position: absolute; left: 12px; top: 11px; width: 22px; height: 22px; border-radius: 50%; background: var(--brand-2); color: #fff; font-size: 12px; font-weight: 700; display: grid; place-items: center; }
+  .mermaid { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 14px; overflow: auto; }
+  .note { color: var(--muted); font-size: 13px; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 760px) { .two { grid-template-columns: 1fr; } }
+  footer { border-top: 1px solid var(--border); padding: 24px 16px; color: var(--muted); font-size: 13px; text-align: center; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 16px 0 0; }
+  .kpi { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+  .kpi .n { font-size: 26px; font-weight: 700; } .kpi .l { color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<header class="hero">
+  <div class="wrap">
+    <span class="pill">CLI em .NET 10 · código aberto · relatórios em pt-BR</span>
+    <h1>Migrator: do .NET Framework ao .NET 10 na AWS</h1>
+    <p class="lead">Lê a aplicação inteira, gera uma cópia migrada e compila. Depois entende o que a aplicação faz, aponta bibliotecas que viraram pagas ou foram descontinuadas, código que compila mas muda de comportamento no Linux, e propõe onde cada projeto deve rodar na AWS, com Dockerfile, diagrama e plano. Com uma LLM plugada, ainda fecha o build sozinho.</p>
+    <div class="cta">
+      <a class="primary" href="demo/migration-report.html">Ver um relatório de exemplo</a>
+      <a class="secondary" href="https://github.com/digounet/DotnetMigrator">Código no GitHub</a>
+      <a class="secondary" href="https://github.com/digounet/DotnetMigrator#readme">Documentação completa</a>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <section>
+    <h2>Pensado para migrar um portfólio, não um projeto</h2>
+    <p class="sub">Dezenas de aplicações com o mesmo pipeline, a mesma arquitetura de referência e um inventário comparável entre elas. O código original nunca é alterado: a saída é uma cópia ao lado.</p>
+    <div class="cards">
+      <div class="card"><span class="tag green">Migração</span><h3>Converte e compila</h3><p>csproj → SDK-style, packages.config → PackageReference com compatibilidade verificada no nuget.org, web.config → appsettings.json, Program.cs gerado a partir do Global.asax/App_Start, controllers Web API reescritos com Roslyn, views Razor ajustadas, build de verificação por projeto.</p></div>
+      <div class="card"><span class="tag purple">Modernização</span><h3>Aponta os gaps</h3><p>AutoMapper 15+, MediatR 13+, FluentAssertions 8+, EPPlus 5+, MassTransit 9+ (viraram pagos), EWS, Topshelf, Crystal (descontinuados) e C# que compila mas muda no .NET 10/Linux: code pages, cultura, <code>TransactionScope</code>, <code>DateTime.Now</code> em UTC, caminhos com barra invertida.</p></div>
+      <div class="card"><span class="tag blue">Arquitetura AWS</span><h3>Recomenda onde rodar</h3><p>ECS Fargate para web, Lambda para automações orientadas a evento, tarefa agendada para jobs, containers Windows só quando há dependência dura. RDS, S3, SQS, SES, ElastiCache, Secrets Manager e o que cada um substitui; diagrama Mermaid, fases, riscos e custo.</p></div>
+      <div class="card"><span class="tag amber">LLM opcional</span><h3>Fecha o build</h3><p>Com <code>--llm</code>, envia cada arquivo com erro ao modelo, recompila e só mantém o que reduz erros. Rascunha a versão ASP.NET Core de módulos, filtros e Windows Services e escreve o resumo executivo. Sem LLM, tudo o mais continua funcionando.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Como funciona</h2>
+    <p class="sub"><code>analyze</code> roda tudo em memória e só grava os relatórios; <code>migrate</code> também grava a cópia e compila.</p>
+    <div class="pipeline">
+      <div>Leitura da solução (.sln/.slnx/.csproj/pasta) e de cada projeto</div>
+      <div>Classificação dos arquivos: código, legado, views, estáticos</div>
+      <div>Plano de inicialização a partir de Global.asax, App_Start, OWIN</div>
+      <div>web.config/app.config → appsettings*.json + dicas de startup</div>
+      <div>Código C#: Roslyn nos controllers, reescritas por regra, detecção</div>
+      <div>Views Razor: bundles, partials, _ViewImports</div>
+      <div>Pacotes NuGet: regras + consulta ao nuget.org</div>
+      <div>.csproj SDK-style e Program.cs do ASP.NET Core</div>
+      <div>Alinhamento de versões entre projetos (evita NU1605)</div>
+      <div>Perfil da aplicação: banco, arquivos, filas, e-mail, sessão, Windows</div>
+      <div>Modernização e arquitetura AWS, Dockerfiles</div>
+      <div>Build de verificação (e laço de correção com LLM) e relatórios</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Onde cada tipo de aplicação vai parar</h2>
+    <p class="sub">A decisão sai do perfil de cada projeto, incluindo o que as bibliotecas referenciadas fazem.</p>
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>Projeto</th><th>Recomendação padrão</th><th>Quando muda</th></tr></thead>
+      <tbody>
+        <tr><td>Web (MVC / Web API)</td><td><strong>ECS Fargate (Linux) + ALB</strong></td><td>COM, Registro, Office Interop, Crystal, WMI → containers Windows; IIS em código → EC2 Windows. API sem views → alternativa Lambda; app interna simples → App Runner.</td></tr>
+        <tr><td>Automação orientada a evento (lê pasta ou caixa de e-mail, processa planilhas, consome fila, grava no banco)</td><td><strong>AWS Lambda</strong> com o gatilho certo: S3 Event Notifications, Amazon SES recebimento → S3, SQS; pastas de rede via Storage Gateway</td><td>Quartz/Hangfire embutido, projeto grande ou dependência Windows substituível → tarefa ECS agendada</td></tr>
+        <tr><td>Windows Service / console com timer</td><td><strong>Tarefa ECS Fargate agendada</strong> pelo EventBridge Scheduler</td><td>Alternativa Lambda se cada execução dura menos de 15 min</td></tr>
+        <tr><td>Consumidor de fila (MSMQ, RabbitMQ, MassTransit)</td><td><strong>Worker ECS Fargate</strong> consumindo SQS, escalado pela fila</td><td>Alternativa Lambda com gatilho SQS</td></tr>
+        <tr><td>Biblioteca / testes</td><td>Empacotada nos consumidores / roda no CI</td><td>—</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <h3>Exemplo: a solução de demonstração</h3>
+    <pre class="mermaid">flowchart LR
+    users([Usuários])
+    alb[Application Load Balancer]
+    subgraph aws[AWS - VPC]
+        direction LR
+        LegacyShop_Importador["LegacyShop.Importador<br/>Lambda"]
+        subgraph ecs[Amazon ECS]
+            LegacyShop_Web["LegacyShop.Web<br/>Fargate service"]
+            LegacyShop_Worker["LegacyShop.Worker<br/>Fargate scheduled task"]
+        end
+        rds[(RDS SQL Server)]
+        cache[(ElastiCache)]
+    end
+    s3[S3]
+    s3_events[S3 Events → SQS]
+    ses_inbound[SES recebimento]
+    eventbridge[EventBridge Scheduler]
+    secrets[Secrets Manager]
+    subgraph onprem[On-premises]
+        erp[erp.interno]
+    end
+    users --> alb --> LegacyShop_Web
+    LegacyShop_Web --> rds
+    LegacyShop_Web --> cache
+    LegacyShop_Web --> s3
+    eventbridge -- agenda --> LegacyShop_Worker
+    LegacyShop_Worker --> rds
+    LegacyShop_Worker -. VPN .-> erp
+    s3 -- ObjectCreated --> s3_events -- dispara --> LegacyShop_Importador
+    ses_inbound -- e-mail recebido --> LegacyShop_Importador
+    LegacyShop_Importador --> rds
+    secrets -.-> LegacyShop_Web</pre>
+    <p class="note">Diagrama gerado pela ferramenta para <code>samples/LegacyShop</code>: um site MVC + Web API, um Windows Service com Quartz, uma biblioteca compartilhada e um console que lê uma pasta de rede e uma caixa postal via EWS. <a href="demo/migration-report.html">Veja o relatório completo</a>, incluindo as 46 sugestões de modernização.</p>
+  </section>
+
+  <section>
+    <h2>O que a LLM acrescenta</h2>
+    <div class="two">
+      <div>
+        <p>Tudo que é determinístico continua determinístico. A LLM entra onde regra não alcança: entender intenção e gerar código novo.</p>
+        <ul>
+          <li><strong>Correção do build</strong>: arquivo com erro + erros + dicas → versão corrigida → recompila. Se não reduzir erros, reverte e tenta de novo com o feedback do compilador. Nunca deixa o arquivo pior que o original.</li>
+          <li><strong>Rascunhos</strong>: <code>IHttpModule</code> → middleware, filtros do System.Web → <code>IActionFilter</code>, <code>ServiceBase</code> → <code>BackgroundService</code>, salvos como <code>.Migrator.cs.txt</code>.</li>
+          <li><strong>Leitura do arquiteto</strong>: resumo executivo, decisões por projeto, riscos prioritários e ordem de trabalho a partir do dossiê estruturado.</li>
+        </ul>
+        <p>A interface é mínima (<code>systemMessage</code> + <code>userMessage</code> → texto): basta implementar <code>ILlmAssistant</code> sobre o SDK da empresa, OpenAI, Bedrock ou Gemini. Respostas são cacheadas; o Ollama local serve para desenvolvimento.</p>
+      </div>
+      <div>
+        <h3 style="margin-top:0">Medido no sample</h3>
+        <div class="table-wrap">
+        <table>
+          <thead><tr><th></th><th>Sem LLM</th><th>Ollama 3B</th><th>Ollama 7B</th></tr></thead>
+          <tbody>
+            <tr><td>Tempo</td><td>18 s</td><td>~7 min</td><td>~2 min</td></tr>
+            <tr><td>Erros de compilação restantes</td><td>6</td><td>3</td><td>2</td></tr>
+            <tr><td>Arquivos corrigidos</td><td>—</td><td>2</td><td>3</td></tr>
+            <tr><td>Rascunhos de conversão</td><td>—</td><td>3</td><td>3</td></tr>
+            <tr><td>Resumo executivo</td><td>—</td><td>não</td><td>sim</td></tr>
+          </tbody>
+        </table>
+        </div>
+        <p class="note">Modelos locais pequenos num Mac. Para o portfólio, a recomendação é um modelo de código de primeira linha (Claude Sonnet/Opus, GPT da linha principal, Gemini Pro) para corrigir e um "mini"/"flash" para o texto.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Início rápido</h2>
+    <pre><code>git clone https://github.com/digounet/DotnetMigrator.git
+cd DotnetMigrator
+dotnet build Migrator.slnx
+
+# 1) só análise: inventário, modernização e arquitetura, sem gravar código
+dotnet run --project src/Migrator.Cli -- analyze C:\src\MinhaApp\MinhaApp.sln
+
+# 2) migração: gera C:\src\MinhaApp.net10 com Dockerfiles, compila e gera relatórios
+dotnet run --project src/Migrator.Cli -- migrate C:\src\MinhaApp\MinhaApp.sln
+
+# 3) com LLM local (Ollama) fechando o build
+ollama pull qwen2.5-coder:7b
+dotnet run --project src/Migrator.Cli -- migrate C:\src\MinhaApp\MinhaApp.sln --llm ollama --llm-model qwen2.5-coder:7b</code></pre>
+    <p>Saídas: <code>migration-report.html</code> (navegável), <code>migration-report.md</code> (para PR/wiki, com o diagrama), <code>inventory.xlsx</code> (abas Resumo, Inventário, Modernização, Arquitetura AWS), <code>inventory.csv</code>, <code>modernization.csv</code> e <code>build-verification.log</code>.</p>
+    <div class="kpis">
+      <div class="kpi"><div class="n">3</div><div class="l">camadas: migração, modernização, arquitetura</div></div>
+      <div class="kpi"><div class="n">100+</div><div class="l">regras de pacotes e código, todas em tabelas</div></div>
+      <div class="kpi"><div class="n">0</div><div class="l">alterações no código original</div></div>
+      <div class="kpi"><div class="n">103</div><div class="l">testes automatizados</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Como estender</h2>
+    <p>As regras são dados em <code>src/Migrator.Core/Data/</code>: um pacote novo é uma linha em <code>PackageRules</code> ou <code>ModernizationRules</code>; um padrão de código é uma regex em <code>CodeRules</code> ou <code>CodeModernizationRules</code>; um sinal de arquitetura entra no enum <code>Signal</code> do <code>ApplicationProfiler</code> e é usado pelo <code>AwsArchitect</code>. O README traz exemplos de cada um e o passo a passo para plugar uma nova LLM.</p>
+  </section>
+</main>
+
+<footer>Migrator · .NET Framework → .NET 10 · <a href="https://github.com/digounet/DotnetMigrator">github.com/digounet/DotnetMigrator</a></footer>
+
+<script type="module">
+  try {
+    const m = await import("https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs");
+    const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    m.default.initialize({ startOnLoad: false, theme: dark ? "dark" : "neutral" });
+    await m.default.run({ querySelector: ".mermaid" });
+  } catch (e) { /* sem internet o diagrama fica como texto */ }
+</script>
+</body>
+</html>

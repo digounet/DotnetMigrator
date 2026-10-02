@@ -689,7 +689,7 @@ public static partial class ConfigMigrator
         result.Items.Add(Item(project, InventorySeverity.Warning, "CFG-SECRETS", "appsettings.json",
             "Possíveis segredos em texto claro no appsettings.json",
             "Senhas/chaves que estavam no web.config/app.config foram copiadas como estão.",
-            "Mova segredos para User Secrets (desenvolvimento), variáveis de ambiente ou Azure Key Vault (builder.Configuration.AddAzureKeyVault) e remova-os do controle de versão."));
+            "Remova-os do appsettings.json e do controle de versão. Em desenvolvimento use User Secrets; em produção um cofre de segredos: na AWS, Secrets Manager/Parameter Store injetados na task definition do ECS ou carregados no IConfiguration com Amazon.Extensions.Configuration.SystemsManager (veja o item MOD-SEC-SECRETS)."));
     }
 
     private static string WithEncryptFalse(string connectionString, string? provider) =>

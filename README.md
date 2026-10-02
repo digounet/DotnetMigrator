@@ -316,7 +316,7 @@ Sugestões que **não bloqueiam a compilação** e por isso ficam separadas do i
 | **Descontinuado** | sem manutenção ou sem versão para .NET 10 | Topshelf, Common.Logging, DotNetZip (CVE), Rotativa/wkhtmltopdf, Crystal Reports, ReportViewer, IdentityServer4, DotNetOpenAuth, Enterprise Library |
 | **Modernização** | alternativa mais simples/rápida ou código C# que **compila mas muda de comportamento** | `Encoding.GetEncoding(1252)` sem provider (exceção em runtime), `Encoding.Default` (virou UTF-8), parse/formatação sem cultura (container sem `LANG` usa cultura invariante), comparações de string com ICU, `string.GetHashCode()` persistido (aleatório por processo), `new HttpClient()` por chamada, `.Result`/`.Wait()`, `async void`, threads manuais, `ArrayList`, DataSet, EF6 → EF Core, Newtonsoft → System.Text.Json |
 | **Cloud (AWS)** | o que precisa mudar para rodar em container/serviços gerenciados | MSMQ → SQS; arquivos/UNC → S3 (ou EFS); SMTP → SES; sessão InProc → ElastiCache; chaves do Data Protection fora do container; `TransactionScope` (sem MSDTC no Linux); `DateTime.Now` (container em UTC); caminhos com `\` e maiúsculas (Linux é case-sensitive); `Process.Start`; IP/HTTPS atrás do ALB; Windows Service → BackgroundService; System.Drawing/Event Log/Registro/COM; Integrated Security no RDS; hosts on-premises (VPN); Azure Storage/Service Bus/Key Vault → S3/SQS/Secrets Manager |
-| **Segurança** | riscos que a migração é um bom momento para corrigir | senhas no config → Secrets Manager; MD5/SHA1/DES/Rijndael; `Random` para tokens; SQL por concatenação; catch vazio |
+| **Segurança** | riscos que a migração é um bom momento para corrigir | credenciais em **qualquer** seção do config (appSettings, connection strings, SMTP, `<identity>`, `sessionState`, `machineKey` fixa, seções customizadas) e **embutidas no código C#** (literais com `Password=`, chaves/tokens, access keys AWS) → Secrets Manager; MD5/SHA1/DES/Rijndael; `Random` para tokens; SQL por concatenação; catch vazio |
 
 ### Arquitetura alvo (AWS)
 
@@ -325,12 +325,15 @@ Para cada projeto publicável a ferramenta recomenda **onde rodar** e por quê, 
 | Projeto | Recomendação padrão | Quando muda |
 |---|---|---|
 | Web (MVC/Web API) | **ECS Fargate (Linux) atrás de um ALB** — padrão de menor operação para um portfólio | Dependência dura de Windows (COM, Registro, Office Interop, Crystal, WMI, P/Invoke) → **containers Windows no ECS**; IIS em código → **EC2 Windows**. API sem views/sessão → alternativa **Lambda**; app interna simples → alternativa **App Runner** |
+| **Automação orientada a evento** (console/serviço que lê pasta ou caixa de e-mail, processa planilhas/CSV, consome fila e grava no banco), sem dependências Windows e com até 25 arquivos de código | **AWS Lambda**, com o gatilho certo: arquivos → S3 Event Notifications → SQS (pastas de rede viram bucket via Storage Gateway File Gateway; parceiros via Transfer Family); e-mail → Amazon SES recebimento → S3 (ou EventBridge → Lambda consultando Microsoft Graph/IMAP); fila → SQS | Quartz/Hangfire embutido, projeto grande ou dependência Windows substituível → **tarefa ECS agendada**, com a dica de trocar o agendamento pelo evento |
 | Windows Service / console com timer ou Quartz/Hangfire | **tarefa ECS Fargate agendada pelo EventBridge Scheduler** (paga só a execução) | alternativa Lambda se < 15 min |
 | Windows Service consumindo fila (MSMQ/RabbitMQ/MassTransit) | **worker ECS Fargate consumindo SQS**, escalado pela profundidade da fila | alternativa Lambda com gatilho SQS |
 | Biblioteca / testes | não publicável (empacotada nos consumidores / roda no CI) | — |
 | Desktop | fora da AWS (ou AppStream 2.0) | — |
 
-Dependências Windows "moles" (System.Drawing, Event Log, PerformanceCounter, ServiceBase, MSMQ, Windows Auth, pastas UNC) **não** forçam containers Windows: a recomendação continua Linux e lista o que substituir (itens `MOD-WIN-*`).
+Dependências Windows "moles" (System.Drawing, Event Log, PerformanceCounter, ServiceBase, MSMQ, Windows Auth, pastas UNC) **não** forçam containers Windows: a recomendação continua Linux e lista o que substituir (itens `MOD-WIN-*`). Leitura de Excel/Access via OLE DB ACE/Jet é dependência dura (só Windows com o Access Database Engine).
+
+**Automações de retaguarda** (a maioria dos portfólios legados): o perfilador reconhece leitura de caixa postal (EWS, IMAP/POP3, Microsoft Graph, Outlook), monitoramento de pasta (`FileSystemWatcher`/varredura), planilhas e CSV (EPPlus, ClosedXML, NPOI, ExcelDataReader, CsvHelper) e FTP. O EWS merece atenção especial: a Microsoft está desligando o EWS no Exchange Online (bloqueio a partir de outubro de 2026), então automações que leem caixas por `Microsoft.Exchange.WebServices` recebem item de impacto alto (`MOD-PKG-EWS`) com dois caminhos: Microsoft Graph, ou mover a entrada de e-mails para o Amazon SES (regra de recebimento → S3 → evento), que elimina polling e senha de caixa. No sample, `LegacyShop.Importador` (console agendado que lê `\\arquivos\pedidos\entrada`, a caixa `pedidos@` via EWS e grava no SQL) é recomendado como Lambda.
 
 Na solução como um todo, a ferramenta monta a lista de **serviços** (obrigatórios e recomendados) com o que cada um substitui e quem usa — RDS (engine conforme as connection strings), S3/EFS, SQS/SNS ou Amazon MQ, SES, ElastiCache, Secrets Manager, Parameter Store, CloudWatch, EventBridge Scheduler, Cognito ou Managed AD, CloudFront, VPN/Direct Connect quando há hosts internos, ECR e pipeline de CI/CD —, um **diagrama Mermaid**, um **plano em fases**, **riscos** e **notas de custo** (containers Windows ≈ 2x, licença do SQL Server no RDS e a opção Aurora PostgreSQL/Babelfish, NAT Gateway, retenção de logs).
 
@@ -368,35 +371,73 @@ dotnet run --project src/Migrator.Cli -- migrate C:\src\Loja\Loja.sln --llm olla
 
 Opções: `--llm ollama|none`, `--llm-model`, `--llm-endpoint` (padrão `http://localhost:11434`), `--llm-rounds` (padrão 3), `--llm-timeout` (minutos por chamada, padrão 6), `--llm-no-cache`.
 
-### Com o SDK da empresa (ou qualquer outro provedor)
+### Passo a passo para plugar uma nova LLM (SDK da empresa, OpenAI, Bedrock, Gemini...)
 
-A ferramenta só precisa de uma interface com duas strings de entrada e uma de saída:
+A ferramenta só precisa de uma interface com duas strings de entrada e uma de saída; todo o resto (prompts, validação, laço de correção, cache, tolerância a falha) já está pronto e é independente do provedor.
 
-```csharp
-public interface ILlmAssistant
-{
-    string Name { get; }   // ex.: "empresa/modelo-x" (aparece nos relatórios e na chave do cache)
-    Task<string> CompleteAsync(string systemMessage, string userMessage, CancellationToken cancellationToken = default);
-}
-```
-
-Implemente-a sobre o SDK:
+**1. Implemente `ILlmAssistant`** (`src/Migrator.Core/Llm/ILlmAssistant.cs`) sobre o SDK:
 
 ```csharp
-public sealed class SdkEmpresaAssistant(SdkCliente cliente, string modelo) : ILlmAssistant
+using Migrator.Core.Llm;
+
+public sealed class SdkEmpresaAssistant : ILlmAssistant
 {
-    public string Name => $"empresa/{modelo}";
+    private readonly SdkCliente _cliente;   // o cliente do SDK interno
+    private readonly string _modelo;
+
+    public SdkEmpresaAssistant(SdkCliente cliente, string modelo) { _cliente = cliente; _modelo = modelo; }
+
+    // Aparece nos relatórios ("LLM: empresa/claude-sonnet") e compõe a chave do cache: troque quando trocar o modelo.
+    public string Name => $"empresa/{_modelo}";
+
     public async Task<string> CompleteAsync(string systemMessage, string userMessage, CancellationToken ct = default)
-        => await cliente.CompletarAsync(systemMessage: systemMessage, userMessage: userMessage, ct);
+    {
+        var resposta = await _cliente.CompletarAsync(
+            modelo: _modelo,
+            systemMessage: systemMessage,
+            userMessage: userMessage,
+            temperatura: 0,          // determinismo: a mesma migração deve dar o mesmo resultado
+            cancellationToken: ct);
+        return resposta.Texto;       // devolva só o texto; a ferramenta extrai o bloco ```csharp
+    }
 }
 ```
 
-e use de uma destas formas:
+Regras de ouro da implementação: lance exceção em falha de infraestrutura (a ferramenta captura `HttpRequestException`, `TaskCanceledException`, `IOException`, `InvalidOperationException` e `NotSupportedException`, registra `LLM-UNAVAILABLE` uma vez e segue sem LLM); respeite o `CancellationToken`; não faça retry infinito dentro do assistente (o laço de correção já controla tentativas); se o SDK exigir "mensagens", monte `[system, user]` nessa ordem.
 
-1. **Em código**, hospedando o `Migrator.Core` num programa próprio: `new MigrationEngine(new SdkEmpresaAssistant(...)).RunAsync(options)`. O cache é aplicado automaticamente se `options.Llm.CacheDir` estiver definido.
-2. **Na CLI**: adicione um `case "empresa" => new SdkEmpresaAssistant(...)` em `LlmAssistantFactory.Create` e chame `--llm empresa`.
+**2. Escolha como a ferramenta vai encontrar a implementação:**
 
-Os prompts (`LlmPrompts`) pedem resposta em um único bloco ```` ```csharp ```` e são validados (bloco presente, tamanho, declaração de tipo, chaves balanceadas) antes de qualquer arquivo ser gravado; mantenha a temperatura baixa no SDK para resultados repetíveis.
+- **Via CLI** (`--llm empresa`): adicione um `case` em `LlmAssistantFactory.Create` (`src/Migrator.Core/Llm/LlmAssistantFactory.cs`) e o nome em `Providers`:
+
+  ```csharp
+  LlmOptions.Ollama => new OllamaAssistant(options.Endpoint, options.Model, options.Timeout),
+  "empresa"         => new SdkEmpresaAssistant(SdkCliente.Criar(options.Endpoint), options.Model ?? "claude-sonnet"),
+  ```
+
+  `--llm-model` e `--llm-endpoint` chegam em `options.Model`/`options.Endpoint`; use-os como quiser (modelo, perfil, região).
+- **Via código**, hospedando o `Migrator.Core` num programa seu (ex.: um pipeline que roda as 51 aplicações):
+
+  ```csharp
+  var engine = new MigrationEngine(new SdkEmpresaAssistant(cliente, "claude-sonnet"));
+  var result = await engine.RunAsync(new MigrationOptions { InputPath = sln, Llm = new LlmOptions { MaxFixRounds = 5 } });
+  ```
+
+  Neste caso o `Provider` das opções é ignorado; o cache (`CacheDir`) e os limites (`MaxFixRounds`, `MaxFilesPerRound`, `MaxDrafts`, `Timeout`) continuam valendo.
+
+**3. Um modelo para corrigir código e outro, mais barato, para o texto (opcional).** Os prompts de sistema são constantes públicas em `LlmPrompts`; um assistente pode rotear por eles:
+
+```csharp
+public Task<string> CompleteAsync(string systemMessage, string userMessage, CancellationToken ct = default) =>
+    systemMessage == LlmPrompts.NarrativeSystem
+        ? _barato.CompleteAsync(systemMessage, userMessage, ct)
+        : _preciso.CompleteAsync(systemMessage, userMessage, ct);
+```
+
+**4. Mantenha o cache ligado.** `LlmAssistantFactory.Wrap` (aplicado automaticamente pela fábrica e pelo `MigrationEngine`) envolve o assistente em `CachedLlmAssistant`: a resposta fica em `~/.migrator/llm-cache/<Name>/<sha256>.txt`. Rodar a mesma aplicação de novo não chama o modelo. Mudou de modelo? Mude o `Name`.
+
+**5. Teste sem o modelo.** Os testes da ferramenta usam assistentes roteirizados (`tests/Migrator.Tests/LlmTests.cs`, classe `ScriptedAssistant`); copie o padrão para testar a sua integração: um `ILlmAssistant` que devolve respostas fixas prova o fluxo, e um teste de contrato contra o SDK real valida autenticação e formato.
+
+**6. Valide num sample antes do portfólio.** `migrate samples/LegacyShop/LegacyShop.sln --llm empresa --llm-no-cache` deve corrigir os erros do `LegacyShop.Core` (veja [Resultados no sample](#resultados-no-sample)); compare com `--llm none`.
 
 ### Que modelo usar
 
@@ -415,6 +456,20 @@ Requisitos práticos, independentemente do fornecedor:
 - **Timeout por chamada** compatível com o modelo (`--llm-timeout`, padrão 6 min): modelos grandes em nuvem respondem em segundos; locais, em minutos.
 - **Volume**: uma aplicação típica gera de 5 a 40 chamadas (arquivos com erro × até 2 tentativas + rascunhos + 1 narrativa), cada uma com 3k a 15k tokens de entrada. Para 51 aplicações é um custo pequeno frente a uma hora de desenvolvedor por arquivo; prefira o modelo mais capaz para a correção de build e um mais barato para a narrativa, se o SDK permitir escolher por chamada (basta duas implementações de `ILlmAssistant` ou um `switch` pelo `systemMessage`).
 - **Dados**: o código-fonte inteiro dos arquivos com erro vai no prompt. Use um endpoint com garantia de não-retenção/não-treinamento (o que o SDK interno da empresa normalmente já assegura).
+
+### Resultados no sample
+
+Medido em `samples/LegacyShop` (build de verificação ligado, nuget.org acessível, cache desligado, modelos locais num Mac):
+
+| | Sem LLM | Ollama `qwen2.5-coder:3b` | Ollama `qwen2.5-coder:7b` |
+|---|---|---|---|
+| Tempo | 18 s | ~7 min | ~2 min |
+| Erros de compilação restantes | 6 em 4 arquivos | 3 em 2 arquivos | 2 em 1 arquivo |
+| Arquivos corrigidos | — | 2 | 3 (injeção de `IConfiguration` por construtor; `BinaryFormatter` → `System.Text.Json`) |
+| Rascunhos de conversão | — | 3 | 3 (`IHttpModule` → middleware, filtro MVC, `ServiceBase` → `BackgroundService`) |
+| Resumo executivo | — | não (timeout) | sim |
+
+O que sobrou (`UserContext`, classe estática com `HttpContext.Current` numa biblioteca sem ASP.NET Core) é um caso em que o 7B devolveu o arquivo sem mudanças, corretamente, porque a regra proíbe inventar dependências; a ferramenta registrou `LLM-FIX-FAILED` em vez de fingir correção. Modelos maiores (ver tabela acima) resolvem esse caso propondo o `IHttpContextAccessor` com o `FrameworkReference` apropriado.
 
 ---
 
