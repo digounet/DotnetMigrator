@@ -45,6 +45,16 @@ public static partial class ExcelReport
         sheet.Row(2).Height = 60;
 
         var row = 4;
+        if (a.ExecutiveSummary != null)
+        {
+            sheet.Cell(row, 1).Value = $"Leitura do arquiteto (LLM: {a.ExecutiveSummaryModel})";
+            sheet.Cell(row, 1).Style.Font.Bold = true;
+            row++;
+            sheet.Cell(row, 1).Value = Truncate(a.ExecutiveSummary);
+            sheet.Range(row, 1, row, 6).Merge().Style.Alignment.WrapText = true;
+            sheet.Row(row).Height = 220;
+            row += 2;
+        }
         string[] hostingHeaders = ["Projeto", "Tipo", "Hospedagem", "Por quê", "Pré-requisitos", "Alternativas"];
         for (var c = 0; c < hostingHeaders.Length; c++) sheet.Cell(row, c + 1).Value = hostingHeaders[c];
         var start = row;

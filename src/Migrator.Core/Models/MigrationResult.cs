@@ -12,6 +12,8 @@ public sealed record MigrationOptions
     public TimeSpan BuildTimeout { get; init; } = TimeSpan.FromMinutes(30);
     /// <summary>Cloud provider for the architecture proposal and container artifacts. None disables the advisor.</summary>
     public CloudTarget Cloud { get; init; } = CloudTarget.Aws;
+    /// <summary>Optional LLM assistance (build-fix loop, conversion drafts, executive narrative). Disabled by default.</summary>
+    public Llm.LlmOptions Llm { get; init; } = new();
 }
 
 public sealed class ProjectResult
@@ -61,6 +63,9 @@ public sealed class SolutionResult
     public bool? BuildSucceeded { get; set; }
     public string? BuildLogPath { get; set; }
     public bool NuGetChecked { get; set; }
+    /// <summary>Provider/model used for the LLM-assisted steps, or null when none was configured.</summary>
+    public string? LlmModel { get; set; }
+    public int LlmCalls { get; set; }
 
     public IEnumerable<InventoryItem> AllItems => GlobalItems.Concat(Projects.SelectMany(p => p.Inventory));
     public IEnumerable<ModernizationItem> AllModernizations => GlobalModernizations.Concat(Projects.SelectMany(p => p.Modernizations));

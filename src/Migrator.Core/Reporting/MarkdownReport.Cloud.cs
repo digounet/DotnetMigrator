@@ -12,6 +12,13 @@ public static partial class MarkdownReport
         sb.AppendLine();
         sb.AppendLine(Inline(a.Summary));
         sb.AppendLine();
+        if (a.ExecutiveSummary != null)
+        {
+            sb.AppendLine($"### Leitura do arquiteto (LLM: {a.ExecutiveSummaryModel})");
+            sb.AppendLine();
+            sb.AppendLine(a.ExecutiveSummary.Replace("\r", ""));
+            sb.AppendLine();
+        }
 
         sb.AppendLine("### Hospedagem recomendada");
         sb.AppendLine();

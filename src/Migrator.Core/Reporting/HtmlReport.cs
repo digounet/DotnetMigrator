@@ -40,6 +40,8 @@ public static partial class HtmlReport
         .item .why { margin: 6px 0 0; color: #3c4043; }
         td.wrap { max-width: 420px; }
         .req { color: var(--green); font-weight: 600; } .opt { color: var(--muted); }
+        .narrative { background: #f8f9fa; border-left: 4px solid var(--purple); padding: 4px 16px; border-radius: 6px; line-height: 1.55; }
+        .narrative h4 { margin: 12px 0 4px; font-size: 14px; } .narrative p { margin: 8px 0; } .narrative ul { margin: 6px 0; }
         table { width: 100%; border-collapse: collapse; background: #fff; }
         th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
         th { background: #f1f3f4; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); }
@@ -114,6 +116,7 @@ public static partial class HtmlReport
         sb.Append($"<span>Gerado em {result.FinishedAt:dd/MM/yyyy HH:mm}</span>");
         sb.Append($"<span>NuGet verificado: {(result.NuGetChecked ? "sim" : "não")}</span>");
         sb.Append($"<span>Build: {result.BuildSucceeded switch { true => "sucesso", false => "com erros", null => "não executado" }}</span>");
+        if (result.LlmModel != null) sb.Append($"<span>LLM: {E(result.LlmModel)} ({result.LlmCalls} chamada(s))</span>");
         sb.Append("</div></header><main>");
 
         sb.Append("<div class=\"cards\">");

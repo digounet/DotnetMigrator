@@ -10,6 +10,7 @@ Tipos de projeto suportados: ASP.NET MVC 5, ASP.NET Web API 2, console, Windows 
 - [Início rápido](#início-rápido)
 - [Como funciona](#como-funciona)
 - [Modernização e arquitetura AWS](#modernização-e-arquitetura-aws)
+- [Assistência por LLM (opcional)](#assistência-por-llm-opcional)
 - [Exemplo: antes e depois](#exemplo-antes-e-depois)
 - [Lendo o inventário](#lendo-o-inventário)
 - [Fluxo de trabalho recomendado](#fluxo-de-trabalho-recomendado)
@@ -342,6 +343,81 @@ Tudo isso aparece no relatório HTML (seções "Arquitetura alvo (AWS)" e "Moder
 
 ---
 
+## Assistência por LLM (opcional)
+
+Tudo que a ferramenta faz é determinístico e **funciona sem nenhuma LLM configurada** (padrão `--llm none`). Uma LLM entra só onde regra não alcança: entender intenção e gerar código novo. Com `--llm <provedor>` três etapas passam a existir:
+
+| Etapa | Quando | O que faz | Salvaguardas |
+|---|---|---|---|
+| **Correção do build** | `migrate` com build de verificação que falhou | Para cada arquivo com erro de compilação envia o arquivo, os erros e as dicas (`BuildHints`); grava a versão corrigida e **recompila**. Repete até `--llm-rounds` rodadas ou até o build passar. | O compilador é o oráculo: se os erros do arquivo não diminuírem, a mudança é **revertida** e o modelo ganha **uma segunda tentativa recebendo os erros que a própria proposta gerou**. Como o C# só aponta erros de corpo de método depois que os de declaração somem, um arquivo "corrigido" numa rodada que voltar a ter erros na seguinte também é revertido ao original. Originais em `_migration-report/llm/*.before`, propostas rejeitadas em `*.llm.cs.txt` / `*.resposta-rejeitada.txt`. Itens `LLM-FIX`, `LLM-FIX-PARTIAL`, `LLM-FIX-REVERTED`, `LLM-FIX-FAILED` e `LLM-SUMMARY` no inventário. |
+| **Rascunhos de conversão** | `migrate` | Para `IHttpModule`/`IHttpHandler`, `HttpApplication`, filtros do System.Web, `ServiceBase` e `ServiceHost` (itens WEB016/017/018, NET006/022) pede a versão ASP.NET Core/.NET 10 e salva como `<Nome>.Migrator.cs.txt` ao lado do arquivo. | Nunca entra no build; item `LLM-DRAFT` informativo. |
+| **Leitura do arquiteto** | `analyze` e `migrate` | Recebe um dossiê estruturado (sinais, hospedagem, serviços, itens de maior impacto) e escreve o resumo executivo, as decisões por projeto, os riscos prioritários e a ordem de trabalho. | Aparece como "Leitura do arquiteto (LLM)" na seção de arquitetura; as tabelas geradas por regras continuam ao lado para conferência. |
+
+Comportamento em falha: se o servidor/modelo não responder, a ferramenta registra **um** aviso (`LLM-UNAVAILABLE`), para de chamar a LLM e termina a migração normalmente.
+
+Respostas são **cacheadas** em `~/.migrator/llm-cache` (chave = provedor + modelo + prompts), então rodar de novo dá o mesmo resultado sem chamar o modelo; `--llm-no-cache` desliga. O provedor Ollama é chamado com temperatura 0 e seed fixa pelo mesmo motivo.
+
+### Local, com Ollama
+
+```powershell
+ollama serve
+ollama pull qwen2.5-coder:3b          # leve, para testes; qwen2.5-coder:7b corrige melhor
+dotnet run --project src/Migrator.Cli -- migrate C:\src\Loja\Loja.sln --llm ollama
+dotnet run --project src/Migrator.Cli -- migrate C:\src\Loja\Loja.sln --llm ollama --llm-model qwen2.5-coder:7b --llm-rounds 5
+```
+
+Opções: `--llm ollama|none`, `--llm-model`, `--llm-endpoint` (padrão `http://localhost:11434`), `--llm-rounds` (padrão 3), `--llm-timeout` (minutos por chamada, padrão 6), `--llm-no-cache`.
+
+### Com o SDK da empresa (ou qualquer outro provedor)
+
+A ferramenta só precisa de uma interface com duas strings de entrada e uma de saída:
+
+```csharp
+public interface ILlmAssistant
+{
+    string Name { get; }   // ex.: "empresa/modelo-x" (aparece nos relatórios e na chave do cache)
+    Task<string> CompleteAsync(string systemMessage, string userMessage, CancellationToken cancellationToken = default);
+}
+```
+
+Implemente-a sobre o SDK:
+
+```csharp
+public sealed class SdkEmpresaAssistant(SdkCliente cliente, string modelo) : ILlmAssistant
+{
+    public string Name => $"empresa/{modelo}";
+    public async Task<string> CompleteAsync(string systemMessage, string userMessage, CancellationToken ct = default)
+        => await cliente.CompletarAsync(systemMessage: systemMessage, userMessage: userMessage, ct);
+}
+```
+
+e use de uma destas formas:
+
+1. **Em código**, hospedando o `Migrator.Core` num programa próprio: `new MigrationEngine(new SdkEmpresaAssistant(...)).RunAsync(options)`. O cache é aplicado automaticamente se `options.Llm.CacheDir` estiver definido.
+2. **Na CLI**: adicione um `case "empresa" => new SdkEmpresaAssistant(...)` em `LlmAssistantFactory.Create` e chame `--llm empresa`.
+
+Os prompts (`LlmPrompts`) pedem resposta em um único bloco ```` ```csharp ```` e são validados (bloco presente, tamanho, declaração de tipo, chaves balanceadas) antes de qualquer arquivo ser gravado; mantenha a temperatura baixa no SDK para resultados repetíveis.
+
+### Que modelo usar
+
+O que a ferramenta pede do modelo é **editar C# com precisão** (corrigir só os erros listados, sem inventar dependências) e, secundariamente, escrever texto. Modelos pequenos erram justamente no primeiro ponto: adicionam `using` de pacotes inexistentes, criam construtor em classe `static`, "melhoram" código que não deviam. Por isso a recomendação é por capacidade, não por fornecedor; use a versão mais recente de cada família disponível no SDK.
+
+| Uso | Recomendado | Aceitável | Evite |
+|---|---|---|---|
+| **Correção de build e rascunhos de conversão** (precisão em código) | Claude Sonnet/Opus (Anthropic, também via Amazon Bedrock), GPT da linha principal da OpenAI (GPT-4.1 / GPT-5), Gemini Pro | Modelos "mini"/"flash" das mesmas famílias, Amazon Nova Pro, Qwen2.5-Coder 14B+/32B local | Modelos < 7B, Nova Micro/Lite, modelos de chat genéricos sem foco em código |
+| **Leitura do arquiteto** (texto a partir de dados estruturados) | qualquer um dos acima; os "mini"/"flash" bastam e custam uma fração | Amazon Nova Lite/Pro | — |
+| **Desenvolvimento e testes locais** | `qwen2.5-coder:7b` no Ollama | `qwen2.5-coder:3b` (só para validar o fluxo; corrige casos simples) | `llama3.2:3b` e similares não especializados |
+
+Requisitos práticos, independentemente do fornecedor:
+
+- **Janela de contexto ≥ 128k tokens**: cada chamada leva um arquivo inteiro, os erros, as dicas e, na 2ª tentativa, a versão rejeitada; o dossiê da arquitetura pode passar de 10k tokens.
+- **Temperatura 0** (ou a menor que o SDK permitir) e, se houver, `seed` fixa: a mesma migração deve dar o mesmo resultado em duas execuções. O cache em disco da ferramenta cobre o restante.
+- **Timeout por chamada** compatível com o modelo (`--llm-timeout`, padrão 6 min): modelos grandes em nuvem respondem em segundos; locais, em minutos.
+- **Volume**: uma aplicação típica gera de 5 a 40 chamadas (arquivos com erro × até 2 tentativas + rascunhos + 1 narrativa), cada uma com 3k a 15k tokens de entrada. Para 51 aplicações é um custo pequeno frente a uma hora de desenvolvedor por arquivo; prefira o modelo mais capaz para a correção de build e um mais barato para a narrativa, se o SDK permitir escolher por chamada (basta duas implementações de `ILlmAssistant` ou um `switch` pelo `systemMessage`).
+- **Dados**: o código-fonte inteiro dos arquivos com erro vai no prompt. Use um endpoint com garantia de não-retenção/não-treinamento (o que o SDK interno da empresa normalmente já assegura).
+
+---
+
 ## Exemplo: antes e depois
 
 Controller Web API 2 original:
@@ -487,8 +563,9 @@ dotnet run --project src/Migrator.Cli -- migrate samples\LegacyShop\LegacyShop.s
 ## Referência da linha de comando
 
 ```
-migrator analyze <entrada> [--report <pasta>] [--offline] [--cloud aws|none]
+migrator analyze <entrada> [--report <pasta>] [--offline] [--cloud aws|none] [--llm none|ollama] [--llm-model <m>] [--llm-endpoint <url>] [--llm-timeout <min>] [--llm-no-cache]
 migrator migrate <entrada> [--output <pasta>] [--report <pasta>] [--offline] [--cloud aws|none] [--force] [--no-build] [--build-timeout <min>]
+                 [--llm none|ollama] [--llm-model <m>] [--llm-endpoint <url>] [--llm-rounds <n>] [--llm-timeout <min>] [--llm-no-cache]
 ```
 
 | Opção | Comando | Descrição |
@@ -498,6 +575,11 @@ migrator migrate <entrada> [--output <pasta>] [--report <pasta>] [--offline] [--
 | `--report`, `-r` | ambos | Pasta dos relatórios (padrão: `<saída>\_migration-report` no migrate; `<pasta-pai>\<nome>.migration-report` no analyze) |
 | `--offline` | ambos | Não consulta o nuget.org |
 | `--cloud` | ambos | Nuvem de destino da proposta de arquitetura e dos Dockerfiles: `aws` (padrão) ou `none` |
+| `--llm` | ambos | Assistência por LLM: `none` (padrão) ou `ollama`; veja [Assistência por LLM](#assistência-por-llm-opcional) |
+| `--llm-model`, `--llm-endpoint` | ambos | Modelo e endpoint do provedor |
+| `--llm-rounds` | migrate | Rodadas build → correção → build (padrão 3) |
+| `--llm-timeout` | ambos | Tempo máximo de cada chamada à LLM, em minutos (padrão 6) |
+| `--llm-no-cache` | ambos | Desliga o cache de respostas |
 | `--force` | migrate | Substitui uma saída anterior do Migrator |
 | `--no-build` | migrate | Pula o build de verificação |
 | `--build-timeout` | migrate | Tempo máximo do build de verificação em minutos (padrão 30) |
@@ -513,6 +595,8 @@ src/Migrator.Core
   Analysis/     WorkspaceLoader (.sln/.slnx/pasta), ProjectLoader (.csproj), StartupAnalyzer (Global.asax/App_Start/OWIN), AssemblyInspector (DLLs),
                 ApplicationProfiler (sinais de arquitetura: banco, arquivos, filas, SMTP, sessão, agendamento, Windows, segredos...)
   Cloud/        ModernizationAdvisor (pacotes + código + sinais → sugestões), AwsArchitect (hospedagem, serviços, Dockerfile, diagrama, plano)
+  Llm/          ILlmAssistant (interface), OllamaAssistant, CachedLlmAssistant, LlmAssistantFactory, LlmSession (falha → segue sem LLM),
+                LlmCodeFixer (build → correção → build), LlmCodeDrafter (rascunhos .Migrator.cs.txt), LlmNarrator (leitura do arquiteto), LlmPrompts
   Data/         PackageRules, FrameworkReferenceRules, CodeRules (C# e Razor), BuildHints,
                 ModernizationRules (pacotes: licença/descontinuados/equivalentes AWS), CodeModernizationRules (C# que compila mas muda)
   Migration/    MigrationEngine (orquestração), ProjectMigrator (por projeto), ControllerRewriter (Roslyn), CodeTransformer,

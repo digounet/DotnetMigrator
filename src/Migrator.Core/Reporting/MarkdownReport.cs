@@ -18,6 +18,7 @@ public static partial class MarkdownReport
         sb.AppendLine($"- **Gerado em:** {result.FinishedAt:dd/MM/yyyy HH:mm}");
         sb.AppendLine($"- **Compatibilidade NuGet verificada:** {(result.NuGetChecked ? "sim" : "não")}");
         sb.AppendLine($"- **Build de verificação:** {result.BuildSucceeded switch { true => "sucesso", false => "com erros", null => "não executado" }}");
+        if (result.LlmModel != null) sb.AppendLine($"- **LLM:** {result.LlmModel} ({result.LlmCalls} chamada(s))");
         sb.AppendLine();
 
         sb.AppendLine("## Resumo");

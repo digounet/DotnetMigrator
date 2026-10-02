@@ -20,6 +20,12 @@ public static partial class HtmlReport
         var a = result.Architecture!;
         sb.Append("<div class=\"panel\" id=\"aws\"><h2>Arquitetura alvo (AWS)</h2><div class=\"body\">");
         sb.Append($"<p class=\"lead\">{E(a.Summary)}</p>");
+        if (a.ExecutiveSummary != null)
+        {
+            sb.Append("<h3>Leitura do arquiteto (LLM)</h3>");
+            sb.Append($"<div class=\"narrative\">{SimpleMarkdown(a.ExecutiveSummary)}</div>");
+            sb.Append($"<p class=\"mermaid-note\">Texto gerado por {E(a.ExecutiveSummaryModel)} a partir dos sinais detectados; confira contra as tabelas abaixo.</p>");
+        }
 
         sb.Append("<h3>Hospedagem recomendada por projeto</h3>");
         sb.Append("<table><thead><tr><th>Projeto</th><th>Tipo</th><th>Hospedagem</th><th>Por quê</th><th>Pré-requisitos</th><th>Alternativas</th></tr></thead><tbody>");
@@ -97,6 +103,34 @@ public static partial class HtmlReport
             }
         }
         sb.Append("</div>");
+    }
+
+    /// <summary>Paragraphs, bullet lists and **bold** are enough for the model's narrative; everything is HTML-encoded first.</summary>
+    internal static string SimpleMarkdown(string markdown)
+    {
+        var sb = new StringBuilder();
+        var inList = false;
+        foreach (var raw in markdown.Replace("\r", "").Split('\n'))
+        {
+            var line = raw.Trim();
+            if (line.Length == 0) { if (inList) { sb.Append("</ul>"); inList = false; } continue; }
+            var isBullet = line.StartsWith("- ", StringComparison.Ordinal) || line.StartsWith("* ", StringComparison.Ordinal) || System.Text.RegularExpressions.Regex.IsMatch(line, @"^\d+[.)]\s");
+            var text = isBullet ? System.Text.RegularExpressions.Regex.Replace(line, @"^(- |\* |\d+[.)]\s)", "") : line.TrimStart('#', ' ');
+            var html = System.Text.RegularExpressions.Regex.Replace(E(text), @"\*\*(.+?)\*\*", "<strong>$1</strong>");
+            html = System.Text.RegularExpressions.Regex.Replace(html, @"`([^`]+)`", "<code>$1</code>");
+            if (isBullet)
+            {
+                if (!inList) { sb.Append("<ul>"); inList = true; }
+                sb.Append($"<li>{html}</li>");
+            }
+            else
+            {
+                if (inList) { sb.Append("</ul>"); inList = false; }
+                sb.Append(line.StartsWith('#') ? $"<h4>{html}</h4>" : $"<p>{html}</p>");
+            }
+        }
+        if (inList) sb.Append("</ul>");
+        return sb.ToString();
     }
 
     private static string List(IReadOnlyList<string> items) =>

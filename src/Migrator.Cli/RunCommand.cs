@@ -94,6 +94,18 @@ public static class RunCommand
         foreach (var item in global.Take(10))
             AnsiConsole.MarkupLine($"[{(item.Severity == InventorySeverity.Breaking ? "red" : "yellow")}]•[/] {Markup.Escape(item.Title)}");
 
+        if (result.LlmModel != null)
+        {
+            var summary = result.GlobalItems.FirstOrDefault(i => i.RuleId == "LLM-SUMMARY");
+            var unavailable = result.GlobalItems.FirstOrDefault(i => i.RuleId == "LLM-UNAVAILABLE");
+            var drafts = result.AllItems.Count(i => i.RuleId == "LLM-DRAFT");
+            AnsiConsole.MarkupLine(unavailable != null
+                ? $"LLM: [yellow]{Markup.Escape(result.LlmModel)} indisponível[/] — {Markup.Escape(unavailable.Description)}"
+                : $"LLM: [cyan]{Markup.Escape(result.LlmModel)}[/], {result.LlmCalls} chamada(s)" +
+                  (summary != null ? $" — {Markup.Escape(summary.Title.Replace("Correção assistida por LLM: ", ""))}" : "") +
+                  (drafts > 0 ? $", {drafts} rascunho(s) de conversão" : "") +
+                  (result.Architecture?.ExecutiveSummary != null ? ", resumo executivo no relatório" : ""));
+        }
         if (!result.NuGetChecked && !result.Options.Offline)
             AnsiConsole.MarkupLine("[yellow]nuget.org inacessível: a compatibilidade dos pacotes não foi verificada.[/]");
 

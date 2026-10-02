@@ -22,6 +22,9 @@ dotnet test tests/Migrator.Tests --filter "FullyQualifiedName~SampleSolutionTest
 dotnet run --project src/Migrator.Cli -- analyze samples/LegacyShop/LegacyShop.sln --offline
 dotnet run --project src/Migrator.Cli -- migrate samples/LegacyShop/LegacyShop.sln --offline --no-build --force
 
+# with a local LLM (optional; Ollama must be running and the model pulled)
+dotnet run --project src/Migrator.Cli -- migrate samples/LegacyShop/LegacyShop.sln --llm ollama --llm-model qwen2.5-coder:3b --force
+
 # pack as a global tool
 dotnet pack src/Migrator.Cli -o nupkg
 ```
@@ -43,7 +46,8 @@ Three projects: `Migrator.Core` (all logic), `Migrator.Cli` (thin System.Command
 3. `Migration/PackageAligner` orders projects topologically and bumps direct package versions across the solution to avoid NU1605, then the `.csproj` for each project is rendered via `ProjectFileWriter` into the plan.
 4. Only when not DryRun: plans are applied to `OutputDir`, a `.slnx` plus root files (`NuGet.config`, `.editorconfig`, `Directory.Build.*`) are written, a `.migrator-output` marker is dropped (required for `--force` to ever delete the folder), and `BuildVerifier` runs `dotnet build` per project in dependency order. A project whose dependency failed is marked `BUILD-BLOCKED`, not built.
 5. When `Options.Cloud == Aws` (default): `AdviseCloud` merges each project's `ApplicationProfile` with the profiles of everything it references (via `PackageAligner.Closure`), asks `Cloud/AwsArchitect.Recommend` for a `HostingRecommendation`, writes a `Dockerfile` into the plan of every deployable project (plus one root `.dockerignore`), and builds `SolutionResult.Architecture` with `AwsArchitect.Propose`.
-6. `Reporting/ReportWriter.WriteAllAsync` emits HTML, Markdown, CSV (+ `modernization.csv`) and Excel (ClosedXML) from the same `SolutionResult`. The report classes are `partial`; the architecture/modernization sections live in `*.Cloud.cs` files.
+6. Optional LLM steps (`Llm/`), only when `Options.Llm.Provider != "none"` or an `ILlmAssistant` was passed to the `MigrationEngine` constructor: `LlmCodeDrafter` writes `*.Migrator.cs.txt` drafts after the plan is applied; after a failed verification build `FixBuildWithLlmAsync` runs `LlmCodeFixer` rounds (fix files → clear Build items → `VerifyBuildAsync` again → `SettleAsync` keeps/reverts); `LlmNarrator` fills `Architecture.ExecutiveSummary`. All calls go through `LlmSession.TryCompleteAsync`, which disables the LLM after the first infrastructure failure and adds one `LLM-UNAVAILABLE` warning. **The migrator must keep working with no LLM configured**; tests run with scripted assistants, never a real model.
+7. `Reporting/ReportWriter.WriteAllAsync` emits HTML, Markdown, CSV (+ `modernization.csv`) and Excel (ClosedXML) from the same `SolutionResult`. The report classes are `partial`; the architecture/modernization sections live in `*.Cloud.cs` files.
 
 ### Per-project order inside `ProjectMigrator.MigrateAsync`
 
@@ -73,6 +77,10 @@ The regex-based rewrites themselves live in `Migration/CodeTransformer.cs` (`Nam
 
 `AwsArchitect` distinguishes **hard** Windows dependencies (COM, Registry, P/Invoke to Windows DLLs, Office Interop, Crystal/ReportViewer, WMI, IIS admin, WinForms/WPF → `EcsWindows`/`Ec2Windows`) from **soft** ones (System.Drawing, EventLog, PerformanceCounter, ServiceBase, MSMQ, Windows Auth, UNC → stay on `EcsFargate` with prerequisites). Workers become `EcsFargateWorker` when queue-driven, `EcsScheduledTask` when timer/scheduler-driven. `Propose` builds components only from deployable projects (their merged profiles include libraries), so "used by" never lists a library or test project. Generated Dockerfiles assume `DefaultCulture = "pt-BR"` (TZ/LANG) when the code depends on local time and the config declares no culture.
 
+### LLM layer (`Llm/`)
+
+`ILlmAssistant` is intentionally minimal (system message + user message → text) so the corporate SDK can be plugged in by implementing it and either adding a case to `LlmAssistantFactory.Create` or passing the instance to `new MigrationEngine(assistant)`. `CachedLlmAssistant` keys responses by `Name` + prompts under `~/.migrator/llm-cache`; `OllamaAssistant` uses temperature 0 / fixed seed. Prompts live in `LlmPrompts` and are part of the cache key, so changing them invalidates cached answers. `LlmPrompts.ExtractCode` + `LooksLikeValidReplacement` gate every file written by the model; the compiler is the final oracle (`LlmCodeFixer.SettleAsync` reverts files whose error count did not drop, then the model gets one retry with those errors as feedback; `MaxAttemptsPerFile = 2`). Because C# reports method-body errors only after declaration errors elsewhere are gone, a file kept as fixed in round N is reverted to its `.before` backup if it shows errors again in round N+1 (`RevertLateRegressionAsync`), and the engine rebuilds after any revert so the report matches the disk. The user message includes the migrated project's package/framework list so the model does not invent dependencies. Inventory rule ids: `LLM-FIX`, `LLM-FIX-PARTIAL`, `LLM-FIX-REVERTED`, `LLM-FIX-FAILED`, `LLM-SUMMARY`, `LLM-DRAFT`, `LLM-UNAVAILABLE`.
+
 ### Inventory model (`Models/InventoryItem`)
 
 Every stage reports into `ProjectResult.Inventory` or `SolutionResult.GlobalItems`. `AutoMigrated = true` means "done for you" (Info severity, shown as green/Automático). `RequiresAction` = not auto and not Info. `Severity.Breaking` items or a failed verification build make the CLI exit with code 2 (0 = clean, 1 = usage/IO error, 130 = cancelled).
@@ -89,5 +97,6 @@ Rule ID prefixes are a convention, not enforced: `WEB*`/`NET*`/`CFG*` and `CS-*`
 
 - Unit tests call the static transformers directly (`CodeTransformer.Transform`, `ControllerRewriter.Rewrite`, `ConfigMigrator`, `StartupAnalyzer`, `RazorTransformer`) with inline C#/XML/Razor raw strings.
 - `SampleSolutionTests` runs the full `MigrationEngine` against `samples/LegacyShop` (a deliberately messy MVC 5 + Web API 2 + Windows Service + VB.NET solution) with `Offline = true, VerifyBuild = false`, into a temp dir. It locates the repo root by walking up to `Migrator.slnx`. It also asserts the expected hosting per project (Web → `EcsFargate`, Worker → `EcsScheduledTask`), key architecture component ids and modernization rule ids.
+- `LlmTests` uses `ScriptedAssistant`/`BrokenAssistant` fakes and an `HttpMessageHandler` stub for `OllamaAssistant`; it also runs the engine on the sample with and without an assistant to prove the LLM layer is optional.
 - `ModernizationAndCloudTests` covers package/code rules, the profiler (config + code signals, EF6 entity connection strings, internal-host detection), hosting decisions (hard vs soft Windows deps, propagation through project references), Dockerfile generation and the cloud additions to `Program.cs`. Build profiles with `ApplicationProfiler.Analyze(project, [("File.cs", code)], XElement.Parse(config))`.
 - When adding a rule: add a unit test, and if the pattern is common add a reproduction to `samples/LegacyShop` and assert its rule ID in `SampleSolutionTests`.

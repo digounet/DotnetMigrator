@@ -2,6 +2,7 @@ using System.Text;
 using System.Xml.Linq;
 using Migrator.Core.Analysis;
 using Migrator.Core.Cloud;
+using Migrator.Core.Llm;
 using Migrator.Core.Data;
 using Migrator.Core.Models;
 using Migrator.Core.NuGet;
@@ -11,6 +12,13 @@ namespace Migrator.Core.Migration;
 
 public sealed class MigrationEngine
 {
+    private readonly ILlmAssistant? _assistant;
+
+    public MigrationEngine() { }
+
+    /// <summary>Use a custom <see cref="ILlmAssistant"/> (e.g. the corporate SDK) instead of the provider named in <see cref="LlmOptions.Provider"/>.</summary>
+    public MigrationEngine(ILlmAssistant? assistant) => _assistant = assistant;
+
     private static readonly string[] RootFilesToCopy = ["NuGet.config", "nuget.config", "NuGet.Config", ".editorconfig", "Directory.Build.props", "Directory.Build.targets"];
 
     public async Task<SolutionResult> RunAsync(MigrationOptions options, IProgress<string>? progress = null, CancellationToken cancellationToken = default)
@@ -49,6 +57,8 @@ public sealed class MigrationEngine
                 });
             }
         }
+
+        var llm = ResolveLlm(options, result);
 
         var map = projects.ToDictionary(p => p.ProjectPath, p => Path.GetRelativePath(workspace.RootDir, p.ProjectPath), StringComparer.OrdinalIgnoreCase);
         using var nuget = new NuGetClient(options.Offline);
@@ -90,10 +100,11 @@ public sealed class MigrationEngine
         foreach (var project in migrated.Where(p => p.Spec != null))
             project.Plan.Write(project.Result.OutputProjectPath!, ProjectFileWriter.Write(project.Spec!));
 
+        List<(ProjectResult Result, ApplicationProfile Profile)>? profiles = null;
         if (options.Cloud == CloudTarget.Aws)
         {
             progress?.Report("Avaliando arquitetura alvo na AWS...");
-            AdviseCloud(result, migrated, ordered);
+            profiles = AdviseCloud(result, migrated, ordered);
         }
 
         if (!options.DryRun)
@@ -104,9 +115,19 @@ public sealed class MigrationEngine
             await File.WriteAllTextAsync(Path.Combine(result.OutputDir!, WorkspaceLoader.OutputMarkerFile),
                 $"Gerado pelo Migrator em {DateTime.Now:O} a partir de {workspace.RootDir}{Environment.NewLine}", cancellationToken);
 
+            if (llm != null) await new LlmCodeDrafter(llm, options.Llm, result.OutputDir!).DraftAsync(result, progress, cancellationToken);
+
             if (options.VerifyBuild && ordered.Count > 0)
+            {
                 await VerifyBuildAsync(result, ordered, options, progress, cancellationToken);
+                if (llm != null && result.BuildSucceeded == false)
+                    await FixBuildWithLlmAsync(llm, result, ordered, options, progress, cancellationToken);
+            }
         }
+
+        if (llm != null && profiles != null)
+            await LlmNarrator.NarrateAsync(llm, result, profiles, progress, cancellationToken);
+        if (llm != null) result.LlmCalls = llm.Calls;
 
         result.FinishedAt = DateTime.Now;
         progress?.Report("Gerando relatórios...");
@@ -118,7 +139,67 @@ public sealed class MigrationEngine
     /// Hosting recommendation per project (using the merged profile of the project plus everything it references),
     /// Dockerfiles for deployable projects and the solution-wide architecture proposal.
     /// </summary>
-    private static void AdviseCloud(SolutionResult result, List<MigratedProject> migrated, IReadOnlyList<MigratedProject> ordered)
+    private LlmSession? ResolveLlm(MigrationOptions options, SolutionResult result)
+    {
+        var assistant = _assistant != null
+            ? (options.Llm.Enabled || options.Llm.CacheDir != null ? LlmAssistantFactory.Wrap(_assistant, options.Llm) : _assistant)
+            : LlmAssistantFactory.Create(options.Llm);
+        if (assistant == null) return null;
+        result.LlmModel = assistant.Name;
+        return new LlmSession(assistant, result);
+    }
+
+    /// <summary>
+    /// Build → ask the model to fix the files with errors → rebuild, up to <see cref="LlmOptions.MaxFixRounds"/> rounds or until the build passes.
+    /// Each round re-runs the whole verification so the inventory's "Build de verificação" section always reflects the final state.
+    /// </summary>
+    private static async Task FixBuildWithLlmAsync(LlmSession llm, SolutionResult result, IReadOnlyList<MigratedProject> ordered, MigrationOptions options,
+        IProgress<string>? progress, CancellationToken cancellationToken)
+    {
+        var fixer = new LlmCodeFixer(llm, options.Llm, result.OutputDir!, result.ReportDir!);
+        var totalBefore = result.AllItems.Count(i => i.Category == InventoryCategory.Build && i.Severity == InventorySeverity.Breaking);
+        async Task RebuildAsync(string label)
+        {
+            if (result.BuildLogPath != null && File.Exists(result.BuildLogPath))
+                File.Move(result.BuildLogPath, Path.Combine(Path.GetDirectoryName(result.BuildLogPath)!, $"build-verification.{label}.log"), overwrite: true);
+            foreach (var project in result.Projects)
+            {
+                project.Inventory.RemoveAll(i => i.Category == InventoryCategory.Build && !i.RuleId.StartsWith("LLM-", StringComparison.Ordinal));
+                project.Build = null;
+            }
+            result.GlobalItems.RemoveAll(i => i.Category == InventoryCategory.Build && !i.RuleId.StartsWith("LLM-", StringComparison.Ordinal));
+            await VerifyBuildAsync(result, ordered, options, progress, cancellationToken);
+        }
+
+        for (var round = 1; round <= options.Llm.MaxFixRounds && llm.Available && result.BuildSucceeded == false; round++)
+        {
+            var attempts = await fixer.FixRoundAsync(result, progress, cancellationToken);
+            if (attempts.Count == 0) break;
+
+            progress?.Report($"Build de verificação após a rodada {round} da LLM...");
+            await RebuildAsync($"antes-da-rodada-{round}");
+            await fixer.SettleAsync(attempts, result, cancellationToken);
+            // Reverted files are back to their original content: rebuild so the inventory describes what is actually on disk.
+            if (fixer.NeedsRebuild)
+            {
+                progress?.Report($"Build de verificação após reverter propostas da rodada {round}...");
+                await RebuildAsync($"rodada-{round}-com-propostas-revertidas");
+            }
+        }
+
+        var totalAfter = result.AllItems.Count(i => i.Category == InventoryCategory.Build && i.Severity == InventorySeverity.Breaking);
+        if (fixer.Round > 0)
+            result.GlobalItems.Add(new InventoryItem
+            {
+                Project = "(solução)", Severity = InventorySeverity.Info, Category = InventoryCategory.Code, RuleId = "LLM-SUMMARY",
+                Title = $"Correção assistida por LLM: {fixer.Round} rodada(s), {fixer.FilesFixed} arquivo(s) corrigidos, {fixer.FilesImproved} melhorados, {fixer.FilesReverted} revertidos",
+                Description = $"Erros de compilação: {totalBefore} antes → {totalAfter} depois ({llm.Assistant.Name}, {llm.Calls} chamada(s)). Originais em _migration-report/llm/.",
+                Suggestion = result.BuildSucceeded == true ? "Revise os diffs dos arquivos LLM-FIX antes de aceitar." : "Os erros restantes seguem listados por projeto; corrija manualmente ou rode novamente com mais rodadas.",
+                AutoMigrated = fixer.FilesFixed > 0
+            });
+    }
+
+    private static List<(ProjectResult Result, ApplicationProfile Profile)> AdviseCloud(SolutionResult result, List<MigratedProject> migrated, IReadOnlyList<MigratedProject> ordered)
     {
         var profiles = new List<(ProjectResult Result, ApplicationProfile Profile)>();
         var byPath = migrated.ToDictionary(m => m.Result.Project.ProjectPath, StringComparer.OrdinalIgnoreCase);
@@ -151,6 +232,7 @@ public sealed class MigrationEngine
             });
         }
         result.Architecture = AwsArchitect.Propose(result, profiles);
+        return profiles;
     }
 
     // Connection strings live in the host while SqlConnection is opened in libraries, so this is decided solution-wide.

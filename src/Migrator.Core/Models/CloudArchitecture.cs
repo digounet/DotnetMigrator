@@ -72,6 +72,9 @@ public sealed class ArchitectureProposal
     public string Diagram { get; set; } = string.Empty;
     /// <summary>One-paragraph description of what the application is, as understood by the tool.</summary>
     public string Summary { get; set; } = string.Empty;
+    /// <summary>Narrative written by the LLM (Markdown, pt-BR) when one is configured; otherwise null.</summary>
+    public string? ExecutiveSummary { get; set; }
+    public string? ExecutiveSummaryModel { get; set; }
 }
 
 public static class CloudText
