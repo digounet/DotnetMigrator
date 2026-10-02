@@ -1,0 +1,52 @@
+using System;
+using Microsoft.Extensions.Configuration;
+using System.Diagnostics;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using LegacyShop.Core.Services;
+using LegacyShop.Worker.Properties;
+using Microsoft.Extensions.Hosting;
+
+namespace LegacyShop.Worker
+{
+    // Serviço de sincronização de estoque com o ERP (versão 2014).
+    public partial class SincronizacaoService : BackgroundService
+    {
+        private readonly IConfiguration configuration;
+
+        private Thread _trabalhador;
+        private readonly int _intervalo;
+
+        public SincronizacaoService(IConfiguration configuration)
+        {
+            this.configuration = configuration;
+            _intervalo = int.Parse(configuration["AppSettings:IntervaloMinutos"]);
+        }
+
+        protected override Task ExecuteAsync(CancellationToken stoppingToken)
+        {
+            EventLog.WriteEntry("LegacyShop.Worker", "Serviço iniciado. Exportação em " + Settings.Default.PastaExportacao);
+            _trabalhador = new Thread(Executar) { IsBackground = true };
+            _trabalhador.Start();
+            return Task.CompletedTask;
+        }
+
+        public override Task StopAsync(CancellationToken cancellationToken)
+        {
+            _trabalhador.Abort();
+            return base.StopAsync(cancellationToken);
+        }
+
+        private void Executar()
+        {
+            var cache = new CacheService();
+            while (true)
+            {
+                var conexao = configuration.GetConnectionString("DefaultConnection");
+                Debug.WriteLine("Sincronizando com " + configuration["AppSettings:ErpEndpoint"] + " usando " + conexao);
+                Thread.Sleep(TimeSpan.FromMinutes(_intervalo));
+            }
+        }
+    }
+}

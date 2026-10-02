@@ -1,0 +1,192 @@
+resource "aws_ecs_cluster" "main" {
+  name = local.name
+  setting {
+    name  = "containerInsights"
+    value = "enabled"
+  }
+}
+
+resource "aws_ecs_cluster_capacity_providers" "main" {
+  cluster_name       = aws_ecs_cluster.main.name
+  capacity_providers = ["FARGATE", "FARGATE_SPOT"]
+  default_capacity_provider_strategy {
+    capacity_provider = "FARGATE"
+    weight            = 1
+  }
+}
+
+resource "aws_security_group" "tasks" {
+  name        = "${local.name}-tasks"
+  description = "ECS tasks"
+  vpc_id      = module.vpc.vpc_id
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# ---------------------------------------------------------------- LegacyShop.Web (ECS Fargate (Linux) + ALB)
+resource "aws_ecr_repository" "legacyshop_web" {
+  name                 = "legacyshop/legacyshop-web"
+  image_tag_mutability = "MUTABLE"
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+}
+
+resource "aws_cloudwatch_log_group" "legacyshop_web" {
+  name              = "/ecs/${local.name}/legacyshop-web"
+  retention_in_days = 30
+}
+
+data "aws_secretsmanager_secret" "legacyshop_web_connectionstrings__relatoriosconnection" {
+  name = "legacyshop/legacyshop.web/ConnectionStrings/RelatoriosConnection" # crie antes com _secrets/LegacyShop.Web/create-secrets.sh
+}
+
+data "aws_secretsmanager_secret" "legacyshop_web_smtp__password" {
+  name = "legacyshop/legacyshop.web/Smtp/Password" # crie antes com _secrets/LegacyShop.Web/create-secrets.sh
+}
+
+data "aws_secretsmanager_secret" "legacyshop_web_appsettings__pagamentoapikey" {
+  name = "legacyshop/legacyshop.web/AppSettings/PagamentoApiKey" # crie antes com _secrets/LegacyShop.Web/create-secrets.sh
+}
+
+resource "aws_ecs_task_definition" "legacyshop_web" {
+  family                   = "${local.name}-legacyshop-web"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "512"
+  memory                   = "1024"
+  execution_role_arn       = aws_iam_role.execution.arn
+  task_role_arn            = aws_iam_role.task.arn
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "X86_64"
+  }
+  container_definitions = jsonencode([{
+    name         = "legacyshop-web"
+    image        = "${aws_ecr_repository.legacyshop_web.repository_url}:${var.image_tag}"
+    essential    = true
+    portMappings = [{ containerPort = 8080, protocol = "tcp" }]
+    environment = [
+      { name = "ASPNETCORE_ENVIRONMENT", value = "Production" },
+      { name = "AWS_REGION", value = var.aws_region }
+    ]
+    secrets = [
+      { name = "ConnectionStrings__RelatoriosConnection", valueFrom = data.aws_secretsmanager_secret.legacyshop_web_connectionstrings__relatoriosconnection.arn },
+      { name = "Smtp__Password", valueFrom = data.aws_secretsmanager_secret.legacyshop_web_smtp__password.arn },
+      { name = "AppSettings__PagamentoApiKey", valueFrom = data.aws_secretsmanager_secret.legacyshop_web_appsettings__pagamentoapikey.arn }
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = aws_cloudwatch_log_group.legacyshop_web.name
+        awslogs-region        = var.aws_region
+        awslogs-stream-prefix = "ecs"
+      }
+    }
+    healthCheck = {
+      command     = ["CMD-SHELL", "curl -fsS http://localhost:8080/health || exit 1"]
+      interval    = 30
+      timeout     = 5
+      retries     = 3
+      startPeriod = 30
+    }
+  }])
+}
+
+resource "aws_ecs_service" "legacyshop_web" {
+  name            = "legacyshop-web"
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.legacyshop_web.arn
+  desired_count   = var.web_desired_count
+  launch_type     = "FARGATE"
+  network_configuration {
+    subnets         = module.vpc.private_subnets
+    security_groups = [aws_security_group.tasks.id]
+  }
+  load_balancer {
+    target_group_arn = aws_lb_target_group.legacyshop_web.arn
+    container_name   = "legacyshop-web"
+    container_port   = 8080
+  }
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+  health_check_grace_period_seconds = 60
+  depends_on                        = [aws_lb_listener.http]
+}
+
+# ---------------------------------------------------------------- LegacyShop.Worker (ECS Fargate (tarefa agendada via EventBridge Scheduler))
+resource "aws_ecr_repository" "legacyshop_worker" {
+  name                 = "legacyshop/legacyshop-worker"
+  image_tag_mutability = "MUTABLE"
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+}
+
+resource "aws_cloudwatch_log_group" "legacyshop_worker" {
+  name              = "/ecs/${local.name}/legacyshop-worker"
+  retention_in_days = 30
+}
+
+resource "aws_ecs_task_definition" "legacyshop_worker" {
+  family                   = "${local.name}-legacyshop-worker"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "512"
+  memory                   = "1024"
+  execution_role_arn       = aws_iam_role.execution.arn
+  task_role_arn            = aws_iam_role.task.arn
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "X86_64"
+  }
+  container_definitions = jsonencode([{
+    name      = "legacyshop-worker"
+    image     = "${aws_ecr_repository.legacyshop_worker.repository_url}:${var.image_tag}"
+    essential = true
+    environment = [
+      { name = "DOTNET_ENVIRONMENT", value = "Production" },
+      { name = "AWS_REGION", value = var.aws_region }
+    ]
+    secrets = [
+
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = aws_cloudwatch_log_group.legacyshop_worker.name
+        awslogs-region        = var.aws_region
+        awslogs-stream-prefix = "ecs"
+      }
+    }
+  }])
+}
+
+resource "aws_scheduler_schedule" "legacyshop_worker" {
+  name                = "${local.name}-legacyshop-worker"
+  schedule_expression = var.schedules["legacyshop_worker"]
+  flexible_time_window {
+    mode = "OFF"
+  }
+  target {
+    arn      = aws_ecs_cluster.main.arn
+    role_arn = aws_iam_role.scheduler.arn
+    ecs_parameters {
+      task_definition_arn = aws_ecs_task_definition.legacyshop_worker.arn
+      launch_type         = "FARGATE"
+      network_configuration {
+        subnets         = module.vpc.private_subnets
+        security_groups = [aws_security_group.tasks.id]
+      }
+    }
+    retry_policy {
+      maximum_retry_attempts = 2
+    }
+  }
+}

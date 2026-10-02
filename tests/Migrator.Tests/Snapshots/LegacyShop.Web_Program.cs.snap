@@ -1,0 +1,110 @@
+using LegacyShop.Core.Services;
+using LegacyShop.Web;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.CookiePolicy;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Newtonsoft.Json.Serialization;
+using System;
+using System.Globalization;
+
+// Gerado pelo Migrator a partir de LegacyShop.Web (v4.7.2). Revise os itens marcados com TODO.
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddControllersWithViews(options =>
+{
+    options.Filters.Add(new RequireHttpsAttribute());
+    // TODO Migrator: portar o filtro para ASP.NET Core e descomentar: options.Filters.Add(new LogActionFilter());
+})
+    .AddNewtonsoftJson(o => o.SerializerSettings.ContractResolver = new DefaultContractResolver());
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddHealthChecks(); // GET /health para o target group do ALB / health check do ECS
+builder.Services.Configure<ForwardedHeadersOptions>(o =>
+{
+    // Atrás do Application Load Balancer: IP do cliente e esquema (https) vêm em X-Forwarded-*
+    o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    o.KnownNetworks.Clear();
+    o.KnownProxies.Clear();
+});
+CultureInfo.DefaultThreadCurrentCulture = CultureInfo.DefaultThreadCurrentUICulture = CultureInfo.GetCultureInfo("pt-BR"); // threads fora de requisição (containers sem LANG usam cultura invariante)
+builder.Services.AddOutputCache();
+builder.Services.AddRouting(o => o.LowercaseUrls = true);
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+    .AddCookie(options =>
+    {
+        options.LoginPath = "/Account/Login";
+        options.ExpireTimeSpan = TimeSpan.FromMinutes(60);
+        options.SlidingExpiration = true;
+        options.Cookie.Name = ".LOJAAUTH";
+    });
+builder.Services.AddAuthorization(options =>
+    options.FallbackPolicy = new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build());
+builder.Services.AddDistributedMemoryCache();
+builder.Services.AddSession(o => o.IdleTimeout = TimeSpan.FromMinutes(30));
+builder.Services.AddCors(options => options.AddDefaultPolicy(policy => policy
+    .WithOrigins("https://loja.exemplo.com.br", "https://admin.exemplo.com.br")
+    .AllowAnyHeader()
+    .WithMethods("GET", "POST", "PUT", "DELETE")));
+builder.Services.Configure<KestrelServerOptions>(o => o.Limits.MaxRequestBodySize = 52428800);
+builder.Services.Configure<IISServerOptions>(o => o.MaxRequestBodySize = 52428800);
+builder.Services.Configure<FormOptions>(o => o.MultipartBodyLengthLimit = 52428800);
+builder.Services.Configure<CookiePolicyOptions>(o =>
+{
+    o.Secure = CookieSecurePolicy.Always;
+    o.HttpOnly = HttpOnlyPolicy.Always;
+});
+
+// Registros convertidos de Unity/Ninject (revise os tempos de vida)
+builder.Services.AddScoped<IProdutoService, ProdutoService>();
+builder.Services.AddTransient<IEmailService, EmailService>();
+builder.Services.AddSingleton<ICacheService, CacheService>();
+
+log4net.Config.XmlConfigurator.Configure(
+    log4net.LogManager.GetRepository(System.Reflection.Assembly.GetEntryAssembly()),
+    new System.IO.FileInfo(System.IO.Path.Combine(builder.Environment.ContentRootPath, "log4net.config")));
+
+// TODO Migrator: instruções do Global.asax.cs (Application_Start) a portar:
+//   AutoMapperConfig.Initialize();
+
+var app = builder.Build();
+
+app.UseForwardedHeaders();
+if (!app.Environment.IsDevelopment())
+{
+    app.UseExceptionHandler("/Home/Error");
+    app.UseHsts();
+}
+else
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.UseRequestLocalization("pt-BR");
+app.UseHttpsRedirection();
+app.UseStaticFiles();
+app.UseCookiePolicy();
+app.UseRouting();
+app.UseCors();
+app.UseAuthentication();
+app.UseAuthorization();
+app.UseSession();
+app.UseOutputCache();
+
+app.MapAreaControllerRoute(name: "Admin_default", areaName: "Admin", pattern: "Admin/{controller}/{action=Index}/{id?}");
+app.MapControllerRoute(name: "ProdutoDetalhe", pattern: "produto/{id}/{slug?}", defaults: new { controller = "Produtos", action = "Detalhe" }, constraints: new { id = @"^(\d+)$" });
+app.MapControllerRoute(name: "Default", pattern: "{controller=Home}/{action=Index}/{id?}");
+app.MapControllers();
+app.MapHealthChecks("/health").AllowAnonymous();
+
+app.Run();

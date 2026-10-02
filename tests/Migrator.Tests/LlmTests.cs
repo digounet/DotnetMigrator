@@ -386,6 +386,46 @@ public sealed class LlmTests : IDisposable
         Assert.Contains("Amazon ECS", assistant.UserMessages[0]);
     }
 
+    // ------------------------------------------------------------------ triage
+
+    [Fact]
+    public async Task Triage_downgrades_temporary_file_writes_and_annotates_the_item()
+    {
+        var projectDir = Path.Combine(_work, "src", "Robo");
+        Directory.CreateDirectory(projectDir);
+        await File.WriteAllTextAsync(Path.Combine(projectDir, "Exportador.cs"), string.Join("\n", Enumerable.Range(1, 30).Select(i => i == 15 ? "        File.WriteAllText(Path.GetTempFileName(), csv);" : $"        // linha {i}")));
+        var result = new SolutionResult { Options = new MigrationOptions { InputPath = "x" }, RootDir = _work };
+        var project = new ProjectResult { Project = new ProjectInfo { ProjectPath = Path.Combine(projectDir, "Robo.csproj"), Name = "Robo", Kind = ProjectKind.Console }, RelativeDir = "Robo" };
+        project.Modernizations.Add(new ModernizationItem { Project = "Robo", RuleId = "MOD-ARCH-FILES", Impact = Impact.High, Title = "Arquivos", Why = "Grava arquivos.", Proposal = "S3.", Evidence = "Exportador.cs:15, Outro.cs:3" });
+        project.Modernizations.Add(new ModernizationItem { Project = "Robo", RuleId = "MOD-CS-STATIC-STATE", Impact = Impact.High, Title = "Estático", Why = "x", Proposal = "y", Evidence = "Exportador.cs:15" });
+        result.Projects.Add(project);
+
+        var assistant = new ScriptedAssistant((_, user) => user.Contains("Pergunta: arquivos")
+            ? """{"classificacao":"temporario","confianca":0.9,"justificativa":"usa Path.GetTempFileName e apaga em seguida"}"""
+            : """{"classificacao":"estado","confianca":0.8,"justificativa":"lista de pedidos pendentes"}""");
+        var triaged = await LlmTriage.TriageAsync(new LlmSession(assistant, result), result, null, CancellationToken.None);
+
+        Assert.Equal(2, triaged);
+        var files = project.Modernizations.Single(m => m.RuleId == "MOD-ARCH-FILES");
+        Assert.Equal(Impact.Medium, files.Impact);                       // downgraded: temporary with high confidence
+        Assert.Contains("Triagem por LLM", files.Why);
+        Assert.Contains("/tmp do container", files.Proposal);
+        var state = project.Modernizations.Single(m => m.RuleId == "MOD-CS-STATIC-STATE");
+        Assert.Equal(Impact.High, state.Impact);                         // "estado" keeps the impact
+        Assert.Contains("lista de pedidos pendentes", state.Why);
+        Assert.Contains(">> ", assistant.UserMessages[0]);               // the snippet marks the evidence line
+        Assert.Contains("Path.GetTempFileName", assistant.UserMessages[0]);
+    }
+
+    [Fact]
+    public void Triage_parser_tolerates_prose_around_the_json_and_rejects_garbage()
+    {
+        var ok = LlmTriage.Parse("Claro! {\"classificacao\":\"cache\",\"confianca\":0.75,\"justificativa\":\"reconstruível\"} espero ter ajudado");
+        Assert.Equal(("cache", 0.75, "reconstruível"), (ok!.Classification, ok.Confidence, ok.Justification));
+        Assert.Null(LlmTriage.Parse("não sei"));
+        Assert.Null(LlmTriage.Parse("{\"outra\":1}"));
+    }
+
     // ------------------------------------------------------------------ engine integration (no LLM configured keeps working)
 
     [Fact]
@@ -407,7 +447,7 @@ public sealed class LlmTests : IDisposable
         });
         Assert.Equal("empresa/sdk", assisted.LlmModel);
         Assert.Equal("Resumo escrito pela LLM.", assisted.Architecture!.ExecutiveSummary);
-        Assert.Equal(1, assistant.Calls); // analyze: only the narrative (no build, no files on disk)
+        Assert.True(assistant.Calls >= 1); // analyze: narrative + triage of ambiguous items (no build, no files on disk)
         Assert.Contains("Leitura do arquiteto (LLM: empresa/sdk)", await File.ReadAllTextAsync(Path.Combine(_work, "r2", "migration-report.md")));
 
         var broken = await new MigrationEngine(new BrokenAssistant()).RunAsync(new MigrationOptions

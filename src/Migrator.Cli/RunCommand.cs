@@ -105,6 +105,7 @@ public static class RunCommand
                 : $"LLM: [cyan]{Markup.Escape(result.LlmModel)}[/], {result.LlmCalls} chamada(s)" +
                   (summary != null ? $" — {Markup.Escape(summary.Title.Replace("Correção assistida por LLM: ", ""))}" : "") +
                   (drafts > 0 ? $", {drafts} rascunho(s) de conversão" : "") +
+                  (result.LlmTriagedItems > 0 ? $", {result.LlmTriagedItems} item(ns) triados" : "") +
                   (result.Architecture?.ExecutiveSummary != null ? ", resumo executivo no relatório" : ""));
         }
         if (!result.NuGetChecked && !result.Options.Offline)

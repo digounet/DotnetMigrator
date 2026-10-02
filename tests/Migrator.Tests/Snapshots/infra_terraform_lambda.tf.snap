@@ -1,0 +1,99 @@
+# ---------------------------------------------------------------- LegacyShop.Importador (AWS Lambda)
+resource "aws_cloudwatch_log_group" "legacyshop_importador" {
+  name              = "/aws/lambda/${local.name}-legacyshop-importador"
+  retention_in_days = 30
+}
+
+resource "aws_lambda_function" "legacyshop_importador" {
+  function_name    = "${local.name}-legacyshop-importador"
+  role             = aws_iam_role.lambda.arn
+  runtime          = var.lambda_runtime
+  handler          = "LegacyShop.Importador::LegacyShop.Importador.Function::FunctionHandler"
+  filename         = var.lambda_packages["legacyshop_importador"]
+  source_code_hash = filebase64sha256(var.lambda_packages["legacyshop_importador"])
+  architectures    = ["arm64"]
+  memory_size      = 512
+  timeout          = 300
+  vpc_config {
+    subnet_ids         = module.vpc.private_subnets
+    security_group_ids = [aws_security_group.tasks.id]
+  }
+  environment {
+    variables = {
+      DOTNET_ENVIRONMENT = "Production"
+      # Segredos: leia em tempo de execução pelo nome (AWSSDK.SecretsManager) ou carregue no IConfiguration com Amazon.Extensions.Configuration.SystemsManager.
+      SECRET_CONNECTIONSTRINGS__DEFAULTCONNECTION = "legacyshop/legacyshop.importador/ConnectionStrings/DefaultConnection"
+      SECRET_APPSETTINGS__CAIXAPOSTALSENHA        = "legacyshop/legacyshop.importador/AppSettings/CaixaPostalSenha"
+    }
+  }
+  depends_on = [aws_cloudwatch_log_group.legacyshop_importador]
+}
+
+resource "aws_sqs_queue" "legacyshop_importador_dlq" {
+  name = "${local.name}-legacyshop-importador-dlq"
+}
+
+resource "aws_sqs_queue" "legacyshop_importador" {
+  name                       = "${local.name}-legacyshop-importador"
+  visibility_timeout_seconds = 360 # >= timeout da função
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.legacyshop_importador_dlq.arn
+    maxReceiveCount     = 3
+  })
+}
+
+resource "aws_lambda_event_source_mapping" "legacyshop_importador" {
+  event_source_arn = aws_sqs_queue.legacyshop_importador.arn
+  function_name    = aws_lambda_function.legacyshop_importador.arn
+  batch_size       = 1
+}
+
+# Arquivos: cada objeto novo no prefixo de entrada vira uma mensagem na fila da função.
+resource "aws_sqs_queue_policy" "legacyshop_importador_s3" {
+  queue_url = aws_sqs_queue.legacyshop_importador.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "s3.amazonaws.com" }
+      Action    = "sqs:SendMessage"
+      Resource  = aws_sqs_queue.legacyshop_importador.arn
+      Condition = { ArnEquals = { "aws:SourceArn" = aws_s3_bucket.files.arn } }
+    }]
+  })
+}
+
+resource "aws_s3_bucket_notification" "legacyshop_importador" {
+  bucket = aws_s3_bucket.files.id
+  queue {
+    queue_arn     = aws_sqs_queue.legacyshop_importador.arn
+    events        = ["s3:ObjectCreated:*"]
+    filter_prefix = "legacyshop-importador/entrada/"
+  }
+  depends_on = [aws_sqs_queue_policy.legacyshop_importador_s3]
+}
+
+# E-mail: regra de recebimento do SES grava a mensagem no bucket (prefixo email/) e o evento do S3 dispara a função.
+resource "aws_ses_receipt_rule_set" "legacyshop_importador" {
+  count         = var.enable_ses_inbound ? 1 : 0
+  rule_set_name = "${local.name}-legacyshop-importador"
+}
+
+resource "aws_ses_active_receipt_rule_set" "legacyshop_importador" {
+  count         = var.enable_ses_inbound ? 1 : 0
+  rule_set_name = aws_ses_receipt_rule_set.legacyshop_importador[0].rule_set_name
+}
+
+resource "aws_ses_receipt_rule" "legacyshop_importador" {
+  count         = var.enable_ses_inbound ? 1 : 0
+  name          = "legacyshop-importador-para-s3"
+  rule_set_name = aws_ses_receipt_rule_set.legacyshop_importador[0].rule_set_name
+  recipients    = var.inbound_recipients
+  enabled       = true
+  scan_enabled  = true
+  s3_action {
+    bucket_name       = aws_s3_bucket.files.id
+    object_key_prefix = "legacyshop-importador/entrada/email/"
+    position          = 1
+  }
+}

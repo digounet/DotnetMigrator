@@ -1,0 +1,28 @@
+# syntax=docker/dockerfile:1
+# Gerado pelo Migrator para LegacyShop.Web — destino: ECS Fargate (Linux) + ALB.
+# Build a partir da raiz da solução:  docker build -f LegacyShop.Web/Dockerfile -t legacyshop_web .
+
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+# Restaura primeiro só os .csproj para aproveitar o cache de camadas
+COPY ["LegacyShop.Core/LegacyShop.Core.csproj", "LegacyShop.Core/"]
+COPY ["LegacyShop.Web/LegacyShop.Web.csproj", "LegacyShop.Web/"]
+COPY ["*.slnx", "NuGet.config*", "Directory.Build.*", "./"]
+RUN dotnet restore "LegacyShop.Web/LegacyShop.Web.csproj"
+COPY . .
+RUN dotnet publish "LegacyShop.Web/LegacyShop.Web.csproj" -c Release -o /app/publish /p:UseAppHost=false
+
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
+WORKDIR /app
+# Cultura/fuso explícitos: containers Linux rodam em UTC e, sem LANG, em cultura invariante (veja itens MOD-CS-DATETIME-NOW / MOD-CS-PARSE-CULTURE)
+ENV ASPNETCORE_HTTP_PORTS=8080 \
+    DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=false \
+    LANG=pt_BR.UTF-8 \
+    LC_ALL=pt_BR.UTF-8 \
+    TZ=America/Sao_Paulo
+EXPOSE 8080
+# Usuário não-root (definido na imagem base do .NET 8+)
+USER $APP_UID
+COPY --from=build /app/publish .
+# Health check do ECS/ALB: GET /health (gerado no Program.cs)
+ENTRYPOINT ["dotnet", "LegacyShop.Web.dll"]

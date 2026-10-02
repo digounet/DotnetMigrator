@@ -1,0 +1,95 @@
+using System.Collections.Generic;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Data.SqlClient;
+using System.IO;
+using System.Linq;
+using Dapper;
+using LegacyShop.Core.Data;
+using LegacyShop.Core.Domain;
+
+namespace LegacyShop.Core.Services
+{
+    public interface IProdutoService
+    {
+        IEnumerable<ProdutoEntidade> ListarDestaques();
+        IEnumerable<ProdutoEntidade> Listar(int pagina);
+        IEnumerable<ProdutoEntidade> Buscar(string termo);
+        IEnumerable<string> ListarCategorias();
+        ProdutoEntidade Obter(int id);
+        void Salvar(ProdutoEntidade produto);
+        void Remover(int id);
+    }
+
+    public class ProdutoService : IProdutoService
+    {
+        private readonly string _connectionString = configuration.GetConnectionString("DefaultConnection");
+        private readonly int _itensPorPagina = int.Parse(configuration["AppSettings:ItensPorPagina"] ?? "20");
+
+        public IEnumerable<ProdutoEntidade> ListarDestaques()
+        {
+            using (var conexao = new SqlConnection(_connectionString))
+            {
+                return conexao.Query<ProdutoEntidade>(LerSql("ConsultaDestaques.sql")).ToList();
+            }
+        }
+
+        public IEnumerable<ProdutoEntidade> Listar(int pagina)
+        {
+            using (var contexto = new ShopContext())
+            {
+                return contexto.Produtos.OrderBy(p => p.Nome).Skip((pagina - 1) * _itensPorPagina).Take(_itensPorPagina).ToList();
+            }
+        }
+
+        public IEnumerable<ProdutoEntidade> Buscar(string termo)
+        {
+            using (var contexto = new ShopContext())
+            {
+                return contexto.Produtos.Where(p => p.Nome.Contains(termo)).ToList();
+            }
+        }
+
+        public IEnumerable<string> ListarCategorias()
+        {
+            using (var contexto = new ShopContext())
+            {
+                return contexto.Produtos.Select(p => p.Categoria).Distinct().ToList();
+            }
+        }
+
+        public ProdutoEntidade Obter(int id)
+        {
+            using (var contexto = new ShopContext())
+            {
+                return contexto.Produtos.Find(id);
+            }
+        }
+
+        public void Salvar(ProdutoEntidade produto)
+        {
+            using (var contexto = new ShopContext())
+            {
+                contexto.Entry(produto).State = produto.Id == 0 ? System.Data.Entity.EntityState.Added : System.Data.Entity.EntityState.Modified;
+                contexto.SaveChanges();
+            }
+        }
+
+        public void Remover(int id)
+        {
+            using (var conexao = new SqlConnection(_connectionString))
+            {
+                conexao.Execute("DELETE FROM Produto WHERE Id = @id", new { id });
+            }
+        }
+
+        private static string LerSql(string nome)
+        {
+            var assembly = typeof(ProdutoService).Assembly;
+            using (var stream = assembly.GetManifestResourceStream("LegacyShop.Core.Sql." + nome))
+            using (var reader = new StreamReader(stream))
+            {
+                return reader.ReadToEnd();
+            }
+        }
+    }
+}

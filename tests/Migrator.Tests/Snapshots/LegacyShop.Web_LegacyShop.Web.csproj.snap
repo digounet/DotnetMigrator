@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>LegacyShop.Web</RootNamespace>
+    <AssemblyName>LegacyShop.Web</AssemblyName>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <DefineConstants>$(DefineConstants);LOJA_BR</DefineConstants>
+    <UserSecretsId>e1cd0ac6-a954-41f9-bbc5-a4aceb57562f</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="_Legacy\**" />
+    <Content Remove="_Legacy\**" />
+    <None Remove="App_Data\categorias.xml" />
+    <Content Include="App_Data\categorias.xml" />
+    <None Remove="Templates\email-pedido.html" />
+    <Content Include="Templates\email-pedido.html" />
+    <Content Remove="bundleconfig.json" />
+    <None Include="bundleconfig.json" />
+    <Content Update="log4net.config" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="AutoMapper" Version="6.2.2" />
+    <PackageReference Include="EntityFramework" Version="6.5.1" />
+    <PackageReference Include="iTextSharp" Version="5.5.13" />
+    <PackageReference Include="log4net" Version="2.0.8" />
+    <PackageReference Include="Microsoft.AspNet.WebApi.Client" Version="5.2.7" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.NewtonsoftJson" Version="10.0.0" />
+    <PackageReference Include="Newtonsoft.Json" Version="12.0.2" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="10.2.3" />
+    <PackageReference Include="System.Configuration.ConfigurationManager" Version="10.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LegacyShop.Core\LegacyShop.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="Legacy.Barcode">
+      <HintPath>..\lib\Legacy.Barcode.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+</Project>

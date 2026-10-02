@@ -1,0 +1,90 @@
+# Gerado pelo Migrator: build, testes, imagens no ECR e deploy no ECS/Lambda para LegacyShop.
+# Pré-requisitos: role IAM para GitHub OIDC em AWS_ROLE_ARN (secret), infraestrutura criada com infra/terraform.
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: sa-east-1
+  APP_NAME: legacyshop
+  ENVIRONMENT: prod
+  DOTNET_VERSION: 10.0.x
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - run: dotnet restore
+      - run: dotnet build --no-restore -c Release
+      - run: dotnet test --no-build -c Release
+
+  containers:
+    needs: build-test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: legacyshop-web
+            dockerfile: LegacyShop.Web/Dockerfile
+            service: legacyshop-web
+            kind: service
+          - name: legacyshop-worker
+            dockerfile: LegacyShop.Worker/Dockerfile
+            service: legacyshop-worker
+            kind: task
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Build e push
+        run: |
+          IMAGE=${{ steps.ecr.outputs.registry }}/${{ env.APP_NAME }}/${{ matrix.name }}
+          docker build -f ${{ matrix.dockerfile }} -t $IMAGE:${{ github.sha }} -t $IMAGE:latest .
+          docker push $IMAGE --all-tags
+      - name: Deploy no ECS
+        if: matrix.kind == 'service'
+        run: |
+          aws ecs update-service --cluster ${{ env.APP_NAME }}-${{ env.ENVIRONMENT }} --service ${{ matrix.service }} --force-new-deployment
+          aws ecs wait services-stable --cluster ${{ env.APP_NAME }}-${{ env.ENVIRONMENT }} --services ${{ matrix.service }}
+      - name: Tarefa agendada atualizada
+        if: matrix.kind == 'task'
+        run: echo "A próxima execução do EventBridge Scheduler usa a imagem :latest recém-publicada."
+
+  lambdas:
+    needs: build-test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: legacyshop-importador
+            project: LegacyShop.Importador/LegacyShop.Importador.csproj
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - run: dotnet tool install -g Amazon.Lambda.Tools
+      - name: Package e deploy
+        run: |
+          cd $(dirname ${{ matrix.project }})
+          dotnet lambda deploy-function ${{ env.APP_NAME }}-${{ env.ENVIRONMENT }}-${{ matrix.name }} --region ${{ env.AWS_REGION }}

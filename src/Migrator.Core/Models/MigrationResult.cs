@@ -88,6 +88,8 @@ public sealed class SolutionResult
     /// <summary>Provider/model used for the LLM-assisted steps, or null when none was configured.</summary>
     public string? LlmModel { get; set; }
     public int LlmCalls { get; set; }
+    /// <summary>Modernization items whose impact/notes were refined by the LLM triage (files temp vs persistent, cache vs state, idempotent jobs).</summary>
+    public int LlmTriagedItems { get; set; }
 
     public IEnumerable<InventoryItem> AllItems => GlobalItems.Concat(Projects.SelectMany(p => p.Inventory));
     public IEnumerable<ModernizationItem> AllModernizations => GlobalModernizations.Concat(Projects.SelectMany(p => p.Modernizations));

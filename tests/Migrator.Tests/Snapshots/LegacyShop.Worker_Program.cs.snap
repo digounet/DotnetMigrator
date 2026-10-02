@@ -1,0 +1,11 @@
+using LegacyShop.Worker;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+
+// Gerado pelo Migrator a partir de Program.cs (ServiceBase.Run). O Program.cs original está em _Legacy/.
+var builder = Host.CreateApplicationBuilder(args);
+builder.Services.AddWindowsService(options => options.ServiceName = "LegacyShopSincronizacao"); // sem efeito fora do Windows (containers Linux)
+builder.Services.AddHostedService<SincronizacaoService>();
+
+var host = builder.Build();
+host.Run();

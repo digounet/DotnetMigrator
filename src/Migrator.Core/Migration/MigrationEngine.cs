@@ -145,6 +145,8 @@ public sealed class MigrationEngine
             }
         }
 
+        if (llm != null)
+            result.LlmTriagedItems = await LlmTriage.TriageAsync(llm, result, progress, cancellationToken);
         if (llm != null && profiles != null)
             await LlmNarrator.NarrateAsync(llm, result, profiles, progress, cancellationToken);
         if (llm != null) result.LlmCalls = llm.Calls;

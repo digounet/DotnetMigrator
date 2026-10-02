@@ -1,0 +1,30 @@
+using System.Threading.Tasks;
+using Amazon.Lambda.Core;
+using Amazon.Lambda.S3Events;
+
+// Serializador JSON dos eventos do Lambda
+[assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]
+
+namespace LegacyShop.Importador
+{
+    /// <summary>
+    /// Gerado pelo Migrator: ponto de entrada da automação na AWS Lambda. O Main() original continua existindo
+    /// para execução local/ECS; aqui cada evento vira uma chamada à mesma lógica de negócio.
+    /// </summary>
+    public class Function
+    {
+        /// <summary>Gatilho: S3 Event Notifications (arquivos de entrada e e-mails recebidos pelo Amazon SES e gravados no bucket).</summary>
+        public async Task FunctionHandler(S3Event evt, ILambdaContext context)
+        {
+            foreach (var record in evt.Records ?? [])
+            {
+                var bucket = record.S3.Bucket.Name;
+                var key = System.Net.WebUtility.UrlDecode(record.S3.Object.Key);
+                context.Logger.LogInformation($"Processando s3://{bucket}/{key}");
+                // TODO Migrator: baixe o objeto (AWSSDK.S3 GetObjectAsync) e chame a lógica que antes lia o arquivo da pasta de entrada.
+                // Ex.: using var s3 = new Amazon.S3.AmazonS3Client(); using var obj = await s3.GetObjectAsync(bucket, key); ... processar(obj.ResponseStream)
+                await Task.CompletedTask;
+            }
+        }
+    }
+}

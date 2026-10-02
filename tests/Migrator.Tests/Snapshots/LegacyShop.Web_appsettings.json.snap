@@ -1,0 +1,40 @@
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "AllowedHosts": "*",
+  "ConnectionStrings": {
+    "DefaultConnection": "Data Source=(LocalDb)\\MSSQLLocalDB;Initial Catalog=LegacyShop;Integrated Security=True;Encrypt=False",
+    "RelatoriosConnection": "<secret: legacyshop/legacyshop.web/ConnectionStrings/RelatoriosConnection>"
+  },
+  "Smtp": {
+    "From": "loja@exemplo.com.br",
+    "DeliveryMethod": "Network",
+    "Host": "smtp.exemplo.com.br",
+    "Port": "587",
+    "UserName": "loja",
+    "Password": "<secret: legacyshop/legacyshop.web/Smtp/Password>",
+    "EnableSsl": "true"
+  },
+  "lojaSettings": {
+    "nome": "Loja Exemplo",
+    "moeda": "BRL",
+    "frete": {
+      "gratisAcimaDe": "199.90",
+      "transportadora": "Correios"
+    },
+    "categorias": {
+      "eletronicos": "Eletrônicos",
+      "livros": "Livros"
+    }
+  },
+  "AppSettings": {
+    "ApiBaseUrl": "http://localhost:51234/api",
+    "ItensPorPagina": "20",
+    "Smtp.From": "loja@exemplo.com.br",
+    "PagamentoApiKey": "<secret: legacyshop/legacyshop.web/AppSettings/PagamentoApiKey>"
+  }
+}
