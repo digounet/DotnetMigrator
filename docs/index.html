@@ -53,6 +53,8 @@
   .pipeline div { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; font-size: 14px; position: relative; padding-left: 44px; }
   .pipeline div::before { counter-increment: step; content: counter(step); position: absolute; left: 12px; top: 11px; width: 22px; height: 22px; border-radius: 50%; background: var(--brand-2); color: #fff; font-size: 12px; font-weight: 700; display: grid; place-items: center; }
   .mermaid { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 14px; overflow: auto; }
+  iframe.diagram { width: 100%; height: 760px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); }
+  @media (max-width: 760px) { iframe.diagram { height: 560px; } }
   .note { color: var(--muted); font-size: 13px; }
   .two { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
   @media (max-width: 760px) { .two { grid-template-columns: 1fr; } }
@@ -67,7 +69,7 @@
   <div class="wrap">
     <span class="pill">CLI em .NET 10 · código aberto · relatórios em pt-BR</span>
     <h1>Migrator: do .NET Framework ao .NET 10 na AWS</h1>
-    <p class="lead">Lê a aplicação inteira, gera uma cópia migrada e compila. Depois entende o que a aplicação faz, aponta bibliotecas que viraram pagas ou foram descontinuadas, código que compila mas muda de comportamento no Linux, e propõe onde cada projeto deve rodar na AWS, com Dockerfile, diagrama e plano. Com uma LLM plugada, ainda fecha o build sozinho.</p>
+    <p class="lead">Lê a aplicação inteira, gera uma cópia migrada e compila, executa os testes e sobe a app para testar <code>/health</code>. Entende o que a aplicação faz, aponta bibliotecas que viraram pagas ou foram descontinuadas e código que muda de comportamento no Linux, e propõe onde cada projeto deve rodar na AWS, com Dockerfile, Terraform e pipeline prontos. Em lote, consolida dezenas de aplicações em ondas de migração. Com uma LLM plugada, ainda fecha o build sozinho.</p>
     <div class="cta">
       <a class="primary" href="demo/migration-report.html">Ver um relatório de exemplo</a>
       <a class="secondary" href="https://github.com/digounet/DotnetMigrator">Código no GitHub</a>
@@ -81,30 +83,18 @@
     <h2>Pensado para migrar um portfólio, não um projeto</h2>
     <p class="sub">Dezenas de aplicações com o mesmo pipeline, a mesma arquitetura de referência e um inventário comparável entre elas. O código original nunca é alterado: a saída é uma cópia ao lado.</p>
     <div class="cards">
-      <div class="card"><span class="tag green">Migração</span><h3>Converte e compila</h3><p>csproj → SDK-style, packages.config → PackageReference com compatibilidade verificada no nuget.org, web.config → appsettings.json, Program.cs gerado a partir do Global.asax/App_Start, controllers Web API reescritos com Roslyn, views Razor ajustadas, build de verificação por projeto.</p></div>
+      <div class="card"><span class="tag green">Migração</span><h3>Converte, compila e prova</h3><p>csproj → SDK-style, packages.config → PackageReference verificado no nuget.org, web.config → appsettings.json com credenciais movidas para <code>_secrets/</code>, Program.cs gerado, controllers Web API reescritos com Roslyn, Windows Service → Worker Service, <code>IConfiguration</code> injetado. Depois: build por projeto, testes migrados executados e <code>/health</code> probado.</p></div>
       <div class="card"><span class="tag purple">Modernização</span><h3>Aponta os gaps</h3><p>AutoMapper 15+, MediatR 13+, FluentAssertions 8+, EPPlus 5+, MassTransit 9+ (viraram pagos), EWS, Topshelf, Crystal (descontinuados) e C# que compila mas muda no .NET 10/Linux: code pages, cultura, <code>TransactionScope</code>, <code>DateTime.Now</code> em UTC, caminhos com barra invertida.</p></div>
-      <div class="card"><span class="tag blue">Arquitetura AWS</span><h3>Recomenda onde rodar</h3><p>ECS Fargate para web, Lambda para automações orientadas a evento, tarefa agendada para jobs, containers Windows só quando há dependência dura. RDS, S3, SQS, SES, ElastiCache, Secrets Manager e o que cada um substitui; diagrama Mermaid, fases, riscos e custo.</p></div>
-      <div class="card"><span class="tag amber">LLM opcional</span><h3>Fecha o build</h3><p>Com <code>--llm</code>, envia cada arquivo com erro ao modelo, recompila e só mantém o que reduz erros. Rascunha a versão ASP.NET Core de módulos, filtros e Windows Services e escreve o resumo executivo. Sem LLM, tudo o mais continua funcionando.</p></div>
+      <div class="card"><span class="tag blue">Arquitetura AWS</span><h3>Recomenda e gera a infraestrutura</h3><p>ECS Fargate para web, Lambda para automações orientadas a evento (com <code>Function.cs</code> gerado), tarefa agendada para jobs, containers Windows só com dependência dura. Sai como módulo Terraform validado (VPC, ECS/ALB, RDS, S3, SQS, SES, ElastiCache, IAM, alarmes) e workflow de deploy no GitHub Actions.</p></div>
+      <div class="card"><span class="tag amber">Portfólio e LLM</span><h3>Dezenas de apps, um plano</h3><p><code>portfolio</code> analisa todas as soluções de uma pasta e consolida ranking de esforço, gaps mais frequentes, bancos compartilhados e ondas de migração, comparável a uma baseline. Com <code>--llm</code>, o modelo fecha o build (revertido se piorar), rascunha conversões e tria falsos positivos. Sem LLM, tudo continua funcionando.</p></div>
     </div>
   </section>
 
   <section>
     <h2>Como funciona</h2>
-    <p class="sub"><code>analyze</code> roda tudo em memória e só grava os relatórios; <code>migrate</code> também grava a cópia e compila.</p>
-    <div class="pipeline">
-      <div>Leitura da solução (.sln/.slnx/.csproj/pasta) e de cada projeto</div>
-      <div>Classificação dos arquivos: código, legado, views, estáticos</div>
-      <div>Plano de inicialização a partir de Global.asax, App_Start, OWIN</div>
-      <div>web.config/app.config → appsettings*.json + dicas de startup</div>
-      <div>Código C#: Roslyn nos controllers, reescritas por regra, detecção</div>
-      <div>Views Razor: bundles, partials, _ViewImports</div>
-      <div>Pacotes NuGet: regras + consulta ao nuget.org</div>
-      <div>.csproj SDK-style e Program.cs do ASP.NET Core</div>
-      <div>Alinhamento de versões entre projetos (evita NU1605)</div>
-      <div>Perfil da aplicação: banco, arquivos, filas, e-mail, sessão, Windows</div>
-      <div>Modernização e arquitetura AWS, Dockerfiles</div>
-      <div>Build de verificação (e laço de correção com LLM) e relatórios</div>
-    </div>
+    <p class="sub"><code>analyze</code> roda tudo em memória e só grava os relatórios; <code>migrate</code> também grava a cópia, compila, testa e gera os artefatos de deploy. Diagrama interativo: clique nos nós, use as visões guiadas e o zoom.</p>
+    <iframe class="diagram" src="diagrams/pipeline.html" title="Como o Migrator processa uma aplicação" loading="lazy"></iframe>
+    <p class="note"><a href="diagrams/pipeline.html">Abrir o diagrama em tela cheia</a></p>
   </section>
 
   <section>
@@ -123,39 +113,8 @@
     </table>
     </div>
     <h3>Exemplo: a solução de demonstração</h3>
-    <pre class="mermaid">flowchart LR
-    users([Usuários])
-    alb[Application Load Balancer]
-    subgraph aws[AWS - VPC]
-        direction LR
-        LegacyShop_Importador["LegacyShop.Importador<br/>Lambda"]
-        subgraph ecs[Amazon ECS]
-            LegacyShop_Web["LegacyShop.Web<br/>Fargate service"]
-            LegacyShop_Worker["LegacyShop.Worker<br/>Fargate scheduled task"]
-        end
-        rds[(RDS SQL Server)]
-        cache[(ElastiCache)]
-    end
-    s3[S3]
-    s3_events[S3 Events → SQS]
-    ses_inbound[SES recebimento]
-    eventbridge[EventBridge Scheduler]
-    secrets[Secrets Manager]
-    subgraph onprem[On-premises]
-        erp[erp.interno]
-    end
-    users --> alb --> LegacyShop_Web
-    LegacyShop_Web --> rds
-    LegacyShop_Web --> cache
-    LegacyShop_Web --> s3
-    eventbridge -- agenda --> LegacyShop_Worker
-    LegacyShop_Worker --> rds
-    LegacyShop_Worker -. VPN .-> erp
-    s3 -- ObjectCreated --> s3_events -- dispara --> LegacyShop_Importador
-    ses_inbound -- e-mail recebido --> LegacyShop_Importador
-    LegacyShop_Importador --> rds
-    secrets -.-> LegacyShop_Web</pre>
-    <p class="note">Diagrama gerado pela ferramenta para <code>samples/LegacyShop</code>: um site MVC + Web API, um Windows Service com Quartz, uma biblioteca compartilhada e um console que lê uma pasta de rede e uma caixa postal via EWS. <a href="demo/migration-report.html">Veja o relatório completo</a>, incluindo as 46 sugestões de modernização.</p>
+    <iframe class="diagram" src="diagrams/legacyshop-aws.html" title="LegacyShop na AWS: arquitetura proposta pelo Migrator" loading="lazy"></iframe>
+    <p class="note">Arquitetura proposta pela ferramenta para <code>samples/LegacyShop</code>: site MVC + Web API, Windows Service com Quartz, biblioteca compartilhada, console que lê pasta de rede e caixa postal via EWS, e um projeto VB.NET. <a href="diagrams/legacyshop-aws.html">Abrir em tela cheia</a> · <a href="demo/migration-report.html">Ver o relatório completo</a>, com 52 sugestões de modernização.</p>
   </section>
 
   <section>
@@ -201,15 +160,18 @@ dotnet run --project src/Migrator.Cli -- analyze C:\src\MinhaApp\MinhaApp.sln
 # 2) migração: gera C:\src\MinhaApp.net10 com Dockerfiles, compila e gera relatórios
 dotnet run --project src/Migrator.Cli -- migrate C:\src\MinhaApp\MinhaApp.sln
 
-# 3) com LLM local (Ollama) fechando o build
+# 3) portfólio: todas as soluções de uma pasta, ranking de esforço e ondas
+dotnet run --project src/Migrator.Cli -- portfolio C:\src\aplicacoes --report C:\src\portfolio
+
+# 4) com LLM local (Ollama) fechando o build
 ollama pull qwen2.5-coder:7b
 dotnet run --project src/Migrator.Cli -- migrate C:\src\MinhaApp\MinhaApp.sln --llm ollama --llm-model qwen2.5-coder:7b</code></pre>
-    <p>Saídas: <code>migration-report.html</code> (navegável), <code>migration-report.md</code> (para PR/wiki, com o diagrama), <code>inventory.xlsx</code> (abas Resumo, Inventário, Modernização, Arquitetura AWS), <code>inventory.csv</code>, <code>modernization.csv</code> e <code>build-verification.log</code>.</p>
+    <p>Saídas: <code>migration-report.html</code> (navegável), <code>migration-report.md</code> (para PR/wiki, com o diagrama), <code>inventory.xlsx</code> (abas Resumo, Inventário, Modernização, Arquitetura AWS), <code>inventory.csv</code>, <code>modernization.csv</code>, <code>migration-result.json</code> e <code>build-verification.log</code>. Na cópia migrada: <code>Dockerfile</code> por projeto, <code>infra/terraform</code>, <code>.github/workflows/deploy.yml</code> e <code>_secrets/</code> (fora do git e do Docker).</p>
     <div class="kpis">
-      <div class="kpi"><div class="n">3</div><div class="l">camadas: migração, modernização, arquitetura</div></div>
+      <div class="kpi"><div class="n">4</div><div class="l">camadas: migração, modernização, arquitetura, portfólio</div></div>
       <div class="kpi"><div class="n">100+</div><div class="l">regras de pacotes e código, todas em tabelas</div></div>
       <div class="kpi"><div class="n">0</div><div class="l">alterações no código original</div></div>
-      <div class="kpi"><div class="n">103</div><div class="l">testes automatizados</div></div>
+      <div class="kpi"><div class="n">128</div><div class="l">testes automatizados</div></div>
     </div>
   </section>
 
@@ -221,13 +183,6 @@ dotnet run --project src/Migrator.Cli -- migrate C:\src\MinhaApp\MinhaApp.sln --
 
 <footer>Migrator · .NET Framework → .NET 10 · <a href="https://github.com/digounet/DotnetMigrator">github.com/digounet/DotnetMigrator</a></footer>
 
-<script type="module">
-  try {
-    const m = await import("https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs");
-    const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    m.default.initialize({ startOnLoad: false, theme: dark ? "dark" : "neutral" });
-    await m.default.run({ querySelector: ".mermaid" });
-  } catch (e) { /* sem internet o diagrama fica como texto */ }
-</script>
+
 </body>
 </html>
