@@ -308,6 +308,12 @@ public sealed class MigrationEngine
             });
         }
         result.Architecture = AwsArchitect.Propose(result, profiles);
+        foreach (var (_, profile) in profiles)
+        {
+            foreach (var db in profile.Databases) if (!result.Databases.Contains(db)) result.Databases.Add(db);
+            foreach (var host in profile.ExternalEndpoints.Select(e => Uri.TryCreate(e, UriKind.Absolute, out var u) ? u.Host : e).Where(ModernizationAdvisor.IsInternalHost)) result.InternalHosts.Add(host);
+            foreach (var db in profile.Databases.Select(d => (d.Server ?? "").Split(',')[0].Split('\\')[0]).Where(h => ModernizationAdvisor.IsInternalHost(h) && !h.Contains("localdb", StringComparison.OrdinalIgnoreCase))) result.InternalHosts.Add(db);
+        }
         return profiles;
     }
 

@@ -62,6 +62,10 @@ For `WindowsService` projects, `WorkerServiceRewriter.Discover` runs on the orig
 
 In contrast, `Analysis/ApplicationProfiler.Analyze` and `Cloud/ModernizationAdvisor.Analyze` run on the **original** code (Code + LegacyCode entries) plus the raw config XML, where `System.Messaging`, `SmtpClient`, `Session[...]`, GAC references etc. are still recognizable. GAC `<Reference>`s only count as a signal when the code mentions the namespace (old templates reference `System.EnterpriseServices`/`System.Management`/`System.Drawing` without using them; counting them would wrongly force Windows containers).
 
+### Portfolio mode
+
+`portfolio <folder>` (`Portfolio/PortfolioRunner`) discovers one application per `.sln`/`.slnx` (`.slnx` wins in the same folder; folders with only project files count as an app; Migrator outputs are skipped), runs `MigrationEngine` in dry-run for each into `<report>/apps/<name>/`, and `PortfolioAggregator` builds the consolidated view: `Score` (reference effort points, documented in the README), bands, inventory/modernization gaps by rule across apps, shared databases/internal hosts (`SolutionResult.Databases`/`InternalHosts`, filled in `AdviseCloud`), three waves (union-find on shared databases, cumulative effort), and `--baseline` deltas from a previous `portfolio.json`. `Reporting/JsonReport` writes `migration-result.json` for every run (DTOs, camelCase, enums as strings); `PortfolioReports` writes HTML/MD/XLSX/JSON.
+
 ### Rules are data
 
 Almost all behavior changes are table entries in `src/Migrator.Core/Data/`:

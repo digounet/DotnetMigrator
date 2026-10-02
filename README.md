@@ -13,6 +13,7 @@ Tipos de projeto suportados: ASP.NET MVC 5, ASP.NET Web API 2, console, Windows 
 - [Como funciona](#como-funciona)
 - [Modernização e arquitetura AWS](#modernização-e-arquitetura-aws)
 - [Assistência por LLM (opcional)](#assistência-por-llm-opcional)
+- [Modo portfólio](#modo-portfólio)
 - [Exemplo: antes e depois](#exemplo-antes-e-depois)
 - [Lendo o inventário](#lendo-o-inventário)
 - [Fluxo de trabalho recomendado](#fluxo-de-trabalho-recomendado)
@@ -310,6 +311,7 @@ Compilar não é funcionar. Depois do build de verificação, para os projetos q
 | `inventory.xlsx` | abas Resumo, Inventário, Modernização e Arquitetura AWS, com filtros, para estimar e distribuir o trabalho |
 | `inventory.csv` | integração com outras ferramentas (UTF-8 com BOM) |
 | `modernization.csv` | sugestões de modernização e arquitetura (tipo, impacto, esforço, evidência, serviço AWS) |
+| `migration-result.json` | resultado completo em JSON (inventário, modernização, arquitetura, hospedagem, bancos, hosts internos) |
 | `build-verification.log` | saída completa do build |
 | `_secrets/<projeto>/` (na saída, fora do git/Docker) | credenciais retiradas do appsettings: `appsettings.Secrets.json`, template, scripts do Secrets Manager, bloco da task definition, user-secrets |
 
@@ -494,6 +496,29 @@ O que sobrou (`UserContext`, classe estática com `HttpContext.Current` numa bib
 
 ---
 
+## Modo portfólio
+
+Para migrar dezenas de aplicações, o `portfolio` analisa todas as soluções de uma pasta de uma vez e consolida o resultado:
+
+```powershell
+migrator portfolio C:\src\aplicacoes --report C:\src\portfolio-2026-10
+# depois de uma rodada de correções, compare com a execução anterior
+migrator portfolio C:\src\aplicacoes --report C:\src\portfolio-2026-11 --baseline C:\src\portfolio-2026-10\portfolio.json
+```
+
+Cada `.sln`/`.slnx` encontrado vira uma aplicação (pastas sem solução, mas com projetos, também contam; saídas anteriores do Migrator são ignoradas). Cada uma recebe um `analyze` completo em `apps/<nome>/` e o consolidado traz:
+
+- **Ranking por esforço**, com uma pontuação de referência (bloqueantes ×3, atenção ×1, modernização de impacto alto ×2, +10 se exige Windows, +5 por arquivo Web Forms, +8 por projeto VB.NET, +3 por projeto web) e faixas Baixo/Médio/Alto. Serve para ordenar e agrupar, não para estimar horas.
+- **Gaps mais frequentes** do inventário e da modernização: em quantas aplicações cada regra aparece (ex.: "EWS em 14 aplicações", "AutoMapper em 31"). É o que define o que vale resolver uma vez e replicar.
+- **Infraestrutura compartilhada**: bancos (servidor/base) e hosts internos usados por mais de uma aplicação; o cutover do RDS precisa ser coordenado entre elas.
+- **Ondas sugeridas**: três ondas por esforço acumulado, quick wins primeiro, mantendo juntas as aplicações que compartilham banco.
+- **Totais de hospedagem e de serviços AWS obrigatórios** (quantas aplicações precisam de RDS, SQS, SES...).
+- **Comparação com baseline** (`--baseline portfolio.json`): bloqueantes, atenção, impacto alto e esforço antes → depois por aplicação, com aplicações novas/removidas.
+
+Saídas: `portfolio-report.html` (tabelas ordenáveis), `portfolio-report.md`, `portfolio.xlsx` (abas Aplicações, Gaps, Compartilhado, Ondas, Baseline) e `portfolio.json`. Todo `analyze`/`migrate` também grava `migration-result.json` com o resultado completo (inventário, modernização, arquitetura, hospedagem) para dashboards e pipelines.
+
+---
+
 ## Exemplo: antes e depois
 
 Controller Web API 2 original:
@@ -640,6 +665,7 @@ dotnet run --project src/Migrator.Cli -- migrate samples\LegacyShop\LegacyShop.s
 
 ```
 migrator analyze <entrada> [--report <pasta>] [--offline] [--cloud aws|none] [--llm none|ollama] [--llm-model <m>] [--llm-endpoint <url>] [--llm-timeout <min>] [--llm-no-cache]
+migrator portfolio <pasta> [--report <pasta>] [--offline] [--cloud aws|none] [--baseline <portfolio.json>] [--llm ...]
 migrator migrate <entrada> [--output <pasta>] [--report <pasta>] [--offline] [--cloud aws|none] [--force] [--no-build] [--build-timeout <min>]
                  [--no-tests] [--no-smoke] [--verify-docker] [--keep-secrets]
                  [--llm none|ollama] [--llm-model <m>] [--llm-endpoint <url>] [--llm-rounds <n>] [--llm-timeout <min>] [--llm-no-cache]
@@ -660,6 +686,7 @@ migrator migrate <entrada> [--output <pasta>] [--report <pasta>] [--offline] [--
 | `--force` | migrate | Substitui uma saída anterior do Migrator |
 | `--no-build` | migrate | Pula o build de verificação |
 | `--build-timeout` | migrate | Tempo máximo do build de verificação em minutos (padrão 30) |
+| `--baseline` | portfolio | `portfolio.json` anterior para comparar a evolução |
 | `--no-tests`, `--no-smoke` | migrate | Não executa os testes migrados / não sobe as apps web para testar `/health` |
 | `--verify-docker` | migrate | Constrói as imagens dos Dockerfiles gerados com o Docker local |
 | `--keep-secrets` | migrate | Mantém credenciais no appsettings gerado em vez de movê-las para `_secrets/` |
@@ -684,7 +711,8 @@ src/Migrator.Core
                 ProgramGenerator, BuildVerifier, TextFiles
   NuGet/        NuGetClient (versões, frameworks e dependências via API v3 do nuget.org)
   Reporting/    HtmlReport, MarkdownReport, ExcelReport, CsvReport
-src/Migrator.Cli      comandos analyze/migrate (System.CommandLine + Spectre.Console)
+  Portfolio/    PortfolioRunner (descoberta + análise em lote), PortfolioAggregator (esforço, gaps, compartilhado, ondas, baseline), PortfolioReports
+src/Migrator.Cli      comandos analyze/migrate/portfolio (System.CommandLine + Spectre.Console)
 tests/Migrator.Tests  testes unitários e de ponta a ponta sobre samples/LegacyShop
 samples/LegacyShop    solução legada de exemplo
 ```

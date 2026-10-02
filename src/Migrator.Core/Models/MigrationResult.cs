@@ -1,3 +1,4 @@
+using Migrator.Core.Analysis;
 using Migrator.Core.Migration;
 
 namespace Migrator.Core.Models;
@@ -71,6 +72,10 @@ public sealed class SolutionResult
     public List<InventoryItem> GlobalItems { get; } = [];
     public List<ModernizationItem> GlobalModernizations { get; } = [];
     public ArchitectureProposal? Architecture { get; set; }
+    /// <summary>Databases referenced by the deployable projects (from connection strings), for the portfolio view.</summary>
+    public List<DatabaseUse> Databases { get; } = [];
+    /// <summary>On-premises hosts (internal DNS names / private IPs) the application talks to.</summary>
+    public SortedSet<string> InternalHosts { get; } = new(StringComparer.OrdinalIgnoreCase);
     public DateTime StartedAt { get; } = DateTime.Now;
     public DateTime FinishedAt { get; set; }
     public bool? BuildSucceeded { get; set; }

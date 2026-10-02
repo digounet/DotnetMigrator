@@ -20,6 +20,7 @@ public static class ReportWriter
         await File.WriteAllTextAsync(Path.Combine(directory, CsvFile), CsvReport.Render(result), utf8Bom);
         if (result.AllModernizations.Any())
             await File.WriteAllTextAsync(Path.Combine(directory, ModernizationCsvFile), CsvReport.RenderModernization(result), utf8Bom);
+        await File.WriteAllTextAsync(Path.Combine(directory, JsonReport.FileName), JsonReport.Render(result), utf8Bom);
         ExcelReport.Write(result, Path.Combine(directory, ExcelFile));
     }
 

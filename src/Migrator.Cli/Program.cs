@@ -87,8 +87,26 @@ migrate.SetAction((parse, ct) => RunCommand.ExecuteAsync(new Migrator.Core.Model
     BuildTimeout = TimeSpan.FromMinutes(Math.Max(1, parse.GetValue(timeout)))
 }, ct));
 
+var portfolioInput = new Argument<string>("pasta") { Description = "Pasta que contém as soluções (.sln/.slnx) ou projetos das aplicações; cada solução vira uma aplicação do portfólio." };
+var portfolioReport = Report(); var portfolioOffline = Offline(); var portfolioCloud = Cloud();
+var portfolioLlm = Llm(); var portfolioLlmModel = LlmModel(); var portfolioLlmEndpoint = LlmEndpoint(); var portfolioLlmNoCache = LlmNoCache(); var portfolioLlmTimeout = LlmTimeout();
+var baseline = new Option<string?>("--baseline") { Description = "portfolio.json de uma execução anterior para comparar a evolução (bloqueantes, atenção, impacto alto, esforço por aplicação)." };
+var portfolio = new Command("portfolio", "Analisa todas as aplicações de uma pasta e consolida: ranking de esforço, gaps mais frequentes, bancos/hosts compartilhados, ondas de migração e serviços AWS.")
+{
+    portfolioInput, portfolioReport, portfolioOffline, portfolioCloud, baseline, portfolioLlm, portfolioLlmModel, portfolioLlmEndpoint, portfolioLlmNoCache, portfolioLlmTimeout
+};
+portfolio.SetAction((parse, ct) => PortfolioCommand.ExecuteAsync(new Migrator.Core.Portfolio.PortfolioOptions
+{
+    RootDir = parse.GetValue(portfolioInput)!,
+    ReportDir = parse.GetValue(portfolioReport),
+    Offline = parse.GetValue(portfolioOffline),
+    Cloud = ParseCloud(parse.GetValue(portfolioCloud)),
+    BaselinePath = parse.GetValue(baseline),
+    Llm = BuildLlm(parse.GetValue(portfolioLlm), parse.GetValue(portfolioLlmModel), parse.GetValue(portfolioLlmEndpoint), 0, parse.GetValue(portfolioLlmNoCache), parse.GetValue(portfolioLlmTimeout))
+}, ct));
+
 var root = new RootCommand("Migrator — moderniza aplicações .NET Framework (MVC, Web API, console, Windows Service, bibliotecas) para .NET 10.")
 {
-    analyze, migrate
+    analyze, migrate, portfolio
 };
 return await root.Parse(args).InvokeAsync();
