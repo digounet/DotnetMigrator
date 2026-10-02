@@ -107,6 +107,24 @@ public sealed class MigrationEngine
         foreach (var project in migrated.Where(p => p.Spec != null))
             project.Plan.Write(project.Result.OutputProjectPath!, ProjectFileWriter.Write(project.Spec!));
 
+        if (profiles != null && !options.DryRun && options.GenerateInfrastructure)
+        {
+            progress?.Report("Gerando infraestrutura como código (Terraform) e pipeline...");
+            var files = InfrastructureGenerator.Generate(result, profiles);
+            var carrier = migrated.FirstOrDefault(m => m.Result.OutputProjectPath != null);
+            if (files.Count > 0 && carrier != null)
+            {
+                foreach (var (path, content) in files) carrier.Plan.Write(path, content);
+                result.GlobalItems.Add(new InventoryItem
+                {
+                    Project = "(solução)", Severity = InventorySeverity.Info, Category = InventoryCategory.ProjectFile, RuleId = "AWS-INFRA",
+                    Title = $"Infraestrutura como código gerada: {files.Count(f => f.Key.EndsWith(".tf", StringComparison.Ordinal))} arquivos Terraform + workflow de deploy",
+                    Description = "infra/terraform/ (VPC, ECS/ALB, tarefas agendadas, workers, Lambda, RDS, S3, ElastiCache, IAM, alarmes) e .github/workflows/deploy.yml, parametrizados por variáveis; infra/README.md traz a ordem de execução.",
+                    Suggestion = "Revise terraform.tfvars.example, configure o backend remoto e crie os segredos (_secrets/*/create-secrets.sh) antes do primeiro apply.", AutoMigrated = true, FilePath = "infra/README.md"
+                });
+            }
+        }
+
         if (!options.DryRun)
         {
             foreach (var project in migrated) await ApplyAsync(project.Plan, result.OutputDir!);
@@ -357,7 +375,7 @@ public sealed class MigrationEngine
         {
             var target = Path.Combine(outputDir, relative);
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            await File.WriteAllTextAsync(target, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+            await File.WriteAllTextAsync(target, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: WantsBom(relative)));
         }
     }
 
@@ -370,6 +388,18 @@ public sealed class MigrationEngine
         if (missing.Count == 0) return;
         var header = existing.Count == 0 ? "# Gerado pelo Migrator" + Environment.NewLine : Environment.NewLine + "# Acrescentado pelo Migrator" + Environment.NewLine;
         File.AppendAllText(path, header + string.Join(Environment.NewLine, missing) + Environment.NewLine);
+    }
+
+    /// <summary>Source and project files keep the BOM Visual Studio writes; scripts, Terraform, YAML, Markdown and Docker files must not have one (a BOM breaks "#!" and terraform fmt).</summary>
+    private static bool WantsBom(string relativePath)
+    {
+        var name = Path.GetFileName(relativePath);
+        if (name is "Dockerfile" or ".dockerignore" or ".gitignore" or ".editorconfig") return false;
+        return Path.GetExtension(name).ToLowerInvariant() switch
+        {
+            ".sh" or ".ps1" or ".tf" or ".tfvars" or ".example" or ".yml" or ".yaml" or ".md" or ".txt" or ".env" => false,
+            _ => true
+        };
     }
 
     private static string WriteSolution(SolutionResult result, Workspace workspace)

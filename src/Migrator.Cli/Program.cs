@@ -63,11 +63,12 @@ var keepSecrets = new Option<bool>("--keep-secrets") { Description = "Mantém se
 var noTests = new Option<bool>("--no-tests") { Description = "Não executa os projetos de teste migrados após o build de verificação." };
 var noSmoke = new Option<bool>("--no-smoke") { Description = "Não sobe as aplicações web migradas para testar /health após o build de verificação." };
 var verifyDocker = new Option<bool>("--verify-docker") { Description = "Constrói as imagens dos Dockerfiles gerados com o Docker local (lento)." };
+var noInfra = new Option<bool>("--no-infra") { Description = "Não gera infra/terraform nem .github/workflows/deploy.yml." };
 var noBuild = new Option<bool>("--no-build") { Description = "Não executa o build de verificação após a migração." };
 var timeout = new Option<int>("--build-timeout") { Description = "Tempo máximo do build de verificação, em minutos.", DefaultValueFactory = _ => 30 };
 var migrate = new Command("migrate", "Gera uma cópia migrada para .NET 10 (com Dockerfiles), compila a saída e gera o inventário, as sugestões de modernização e a arquitetura alvo.")
 {
-    migrateInput, output, migrateReport, migrateOffline, migrateCloud, force, noBuild, timeout, keepSecrets, noTests, noSmoke, verifyDocker,
+    migrateInput, output, migrateReport, migrateOffline, migrateCloud, force, noBuild, timeout, keepSecrets, noTests, noSmoke, verifyDocker, noInfra,
     migrateLlm, migrateLlmModel, migrateLlmEndpoint, migrateLlmRounds, migrateLlmNoCache, migrateLlmTimeout
 };
 migrate.SetAction((parse, ct) => RunCommand.ExecuteAsync(new Migrator.Core.Models.MigrationOptions
@@ -83,6 +84,7 @@ migrate.SetAction((parse, ct) => RunCommand.ExecuteAsync(new Migrator.Core.Model
     RunTests = !parse.GetValue(noTests),
     SmokeTest = !parse.GetValue(noSmoke),
     VerifyDocker = parse.GetValue(verifyDocker),
+    GenerateInfrastructure = !parse.GetValue(noInfra),
     VerifyBuild = !parse.GetValue(noBuild),
     BuildTimeout = TimeSpan.FromMinutes(Math.Max(1, parse.GetValue(timeout)))
 }, ct));

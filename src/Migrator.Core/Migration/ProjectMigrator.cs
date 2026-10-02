@@ -142,6 +142,7 @@ public static partial class ProjectMigrator
         var secrets = ctx.KeepSecrets ? new SecretsPlan() : SecretsExtractor.Extract(config, ctx.SolutionName, project.Name);
         if (secrets.Any)
         {
+            result.Secrets = secrets;
             config.Items.RemoveAll(i => i.RuleId == "CFG-SECRETS");
             WriteSecretsArtifacts(project, secrets, plan, result.RelativeDir, items);
             foreach (var m in result.Modernizations.Where(m => m.RuleId == "MOD-SEC-SECRETS"))

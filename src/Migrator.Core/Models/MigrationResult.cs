@@ -23,6 +23,8 @@ public sealed record MigrationOptions
     public bool SmokeTest { get; init; } = true;
     /// <summary>Build the generated Dockerfiles with the local Docker (slow; off by default).</summary>
     public bool VerifyDocker { get; init; }
+    /// <summary>Generate infra/terraform and .github/workflows/deploy.yml from the architecture proposal (migrate + AWS only).</summary>
+    public bool GenerateInfrastructure { get; init; } = true;
     /// <summary>Optional LLM assistance (build-fix loop, conversion drafts, executive narrative). Disabled by default.</summary>
     public Llm.LlmOptions Llm { get; init; } = new();
 }
@@ -36,6 +38,8 @@ public sealed class ProjectResult
     public List<ModernizationItem> Modernizations { get; } = [];
     public HostingRecommendation? Hosting { get; set; }
     public ProjectBuildStatus? Build { get; set; }
+    /// <summary>Credentials moved out of this project's appsettings (null when none or when --keep-secrets).</summary>
+    public SecretsPlan? Secrets { get; set; }
     public TestRunStatus? Tests { get; set; }
     public SmokeTestStatus? Smoke { get; set; }
     public bool? DockerBuildSucceeded { get; set; }

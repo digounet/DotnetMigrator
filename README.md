@@ -14,6 +14,7 @@ Tipos de projeto suportados: ASP.NET MVC 5, ASP.NET Web API 2, console, Windows 
 - [Modernização e arquitetura AWS](#modernização-e-arquitetura-aws)
 - [Assistência por LLM (opcional)](#assistência-por-llm-opcional)
 - [Modo portfólio](#modo-portfólio)
+- [Infraestrutura como código e CI/CD](#infraestrutura-como-código-e-cicd)
 - [Exemplo: antes e depois](#exemplo-antes-e-depois)
 - [Lendo o inventário](#lendo-o-inventário)
 - [Fluxo de trabalho recomendado](#fluxo-de-trabalho-recomendado)
@@ -313,6 +314,7 @@ Compilar não é funcionar. Depois do build de verificação, para os projetos q
 | `modernization.csv` | sugestões de modernização e arquitetura (tipo, impacto, esforço, evidência, serviço AWS) |
 | `migration-result.json` | resultado completo em JSON (inventário, modernização, arquitetura, hospedagem, bancos, hosts internos) |
 | `build-verification.log` | saída completa do build |
+| `infra/` e `.github/workflows/deploy.yml` (na saída) | Terraform da arquitetura proposta e pipeline de deploy |
 | `_secrets/<projeto>/` (na saída, fora do git/Docker) | credenciais retiradas do appsettings: `appsettings.Secrets.json`, template, scripts do Secrets Manager, bloco da task definition, user-secrets |
 
 ---
@@ -519,6 +521,24 @@ Saídas: `portfolio-report.html` (tabelas ordenáveis), `portfolio-report.md`, `
 
 ---
 
+## Infraestrutura como código e CI/CD
+
+No `migrate` (com `--cloud aws`, o padrão) a arquitetura proposta vira artefatos de deploy na saída:
+
+```
+infra/terraform/      módulo raiz: versions, variables, network (VPC + endpoints), iam, ecs (cluster, task definitions,
+                      serviços web, tarefas agendadas, workers com autoscaling por fila), alb, lambda (função + SQS +
+                      gatilhos S3/SES), data (RDS), storage (S3, SQS), cache (ElastiCache), observability (SNS + alarmes), outputs
+infra/README.md       ordem de execução e checklist de produção
+.github/workflows/deploy.yml   build + testes, imagens no ECR por projeto, update-service no ECS, deploy das Lambdas
+```
+
+Princípios: um template por aplicação, parametrizado por variáveis (`terraform.tfvars.example` traz o ponto de partida); nenhum segredo no código (as task definitions referenciam os segredos criados pelos scripts de `_secrets/` via `data "aws_secretsmanager_secret"`; a senha master do RDS é gerenciada pelo próprio RDS); tasks em subnets privadas com VPC endpoints; execution role e task role separadas com permissões restritas ao prefixo da aplicação; health check em `/health`; circuit breaker com rollback no deploy; alarmes de 5xx e CPU. O que a ferramenta não consegue decidir fica como variável ou comentário (certificado ACM, hosts, VPN para a rede interna, recebimento SES).
+
+O código gerado para o sample passa em `terraform fmt -check`, `terraform init` e `terraform validate` (provider AWS 6.x). Projetos não convertidos (VB.NET) e os recomendados para EC2 Windows não geram recursos; o README da infra diz por quê. `--no-infra` desliga a geração.
+
+---
+
 ## Exemplo: antes e depois
 
 Controller Web API 2 original:
@@ -667,7 +687,7 @@ dotnet run --project src/Migrator.Cli -- migrate samples\LegacyShop\LegacyShop.s
 migrator analyze <entrada> [--report <pasta>] [--offline] [--cloud aws|none] [--llm none|ollama] [--llm-model <m>] [--llm-endpoint <url>] [--llm-timeout <min>] [--llm-no-cache]
 migrator portfolio <pasta> [--report <pasta>] [--offline] [--cloud aws|none] [--baseline <portfolio.json>] [--llm ...]
 migrator migrate <entrada> [--output <pasta>] [--report <pasta>] [--offline] [--cloud aws|none] [--force] [--no-build] [--build-timeout <min>]
-                 [--no-tests] [--no-smoke] [--verify-docker] [--keep-secrets]
+                 [--no-tests] [--no-smoke] [--verify-docker] [--keep-secrets] [--no-infra]
                  [--llm none|ollama] [--llm-model <m>] [--llm-endpoint <url>] [--llm-rounds <n>] [--llm-timeout <min>] [--llm-no-cache]
 ```
 
@@ -690,6 +710,7 @@ migrator migrate <entrada> [--output <pasta>] [--report <pasta>] [--offline] [--
 | `--no-tests`, `--no-smoke` | migrate | Não executa os testes migrados / não sobe as apps web para testar `/health` |
 | `--verify-docker` | migrate | Constrói as imagens dos Dockerfiles gerados com o Docker local |
 | `--keep-secrets` | migrate | Mantém credenciais no appsettings gerado em vez de movê-las para `_secrets/` |
+| `--no-infra` | migrate | Não gera `infra/terraform` nem o workflow de deploy |
 
 Atrás de proxy corporativo, defina `HTTPS_PROXY` antes de executar. Se o nuget.org estiver inacessível, a ferramenta continua e avisa no relatório.
 
@@ -701,7 +722,8 @@ Atrás de proxy corporativo, defina `HTTPS_PROXY` antes de executar. Se o nuget.
 src/Migrator.Core
   Analysis/     WorkspaceLoader (.sln/.slnx/pasta), ProjectLoader (.csproj), StartupAnalyzer (Global.asax/App_Start/OWIN), AssemblyInspector (DLLs),
                 ApplicationProfiler (sinais de arquitetura: banco, arquivos, filas, SMTP, sessão, agendamento, Windows, segredos...)
-  Cloud/        ModernizationAdvisor (pacotes + código + sinais → sugestões), AwsArchitect (hospedagem, serviços, Dockerfile, diagrama, plano)
+  Cloud/        ModernizationAdvisor (pacotes + código + sinais → sugestões), AwsArchitect (hospedagem, serviços, Dockerfile, diagrama, plano),
+                LambdaScaffolder (Function.cs + aws-lambda-tools-defaults.json), InfrastructureGenerator (Terraform + workflow)
   Llm/          ILlmAssistant (interface), OllamaAssistant, CachedLlmAssistant, LlmAssistantFactory, LlmSession (falha → segue sem LLM),
                 LlmCodeFixer (build → correção → build), LlmCodeDrafter (rascunhos .Migrator.cs.txt), LlmNarrator (leitura do arquiteto), LlmPrompts
   Data/         PackageRules, FrameworkReferenceRules, CodeRules (C# e Razor), BuildHints,
