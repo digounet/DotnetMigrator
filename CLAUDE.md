@@ -29,7 +29,7 @@ dotnet run --project src/Migrator.Cli -- migrate samples/LegacyShop/LegacyShop.s
 dotnet pack src/Migrator.Cli -o nupkg
 ```
 
-Outputs under `samples/**/*.net10/` and `samples/**/*.migration-report/` are gitignored, so running the CLI on the sample is safe.
+Outputs under `samples/**/*.net10/` and `samples/**/*.migration-report/` are gitignored, so running the CLI on the sample is safe. `docs/` is the GitHub Pages site (served from `main`, folder `/docs`): `docs/index.html` is hand-written; `docs/demo/` holds the sample's report, regenerated with `analyze samples/LegacyShop/LegacyShop.sln --offline --report docs/demo` (delete the csv/xlsx afterwards; only the HTML and Markdown are published).
 
 `ProjectFileWriter` normalizes every path attribute in the generated `.csproj` to MSBuild-style backslashes, so output (and the e2e tests) are identical on Windows, macOS and Linux.
 

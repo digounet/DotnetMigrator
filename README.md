@@ -1,5 +1,7 @@
 # Migrator — .NET Framework → .NET 10
 
+> Site e relatório de demonstração: **https://digounet.github.io/DotnetMigrator/**
+
 Ferramenta de linha de comando que lê uma aplicação .NET Framework inteira (solução, projeto ou diretório), gera uma **cópia** migrada para .NET 10, compila essa cópia e produz um **inventário** do que ainda exige ação manual, com uma sugestão para cada item. O código original nunca é alterado.
 
 Além da migração, a ferramenta **entende a aplicação** e entrega duas camadas de recomendação: **modernização** (bibliotecas que passaram a ser pagas ou foram descontinuadas, código C# que compila mas muda de comportamento no .NET 10/Linux, idiomas antigos) e **arquitetura alvo na AWS** (qual serviço hospeda cada projeto — ECS Fargate, tarefa agendada, Lambda, containers Windows — e quais serviços gerenciados substituem banco, filas, arquivos, e-mail, sessão, segredos e agendamento), com Dockerfiles gerados, diagrama e plano de migração. Foi pensada para programas de migração em lote: dezenas de aplicações, mesmo pipeline, mesma arquitetura de referência.
