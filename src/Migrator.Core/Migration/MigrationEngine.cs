@@ -97,15 +97,15 @@ public sealed class MigrationEngine
         progress?.Report("Alinhando versões de pacotes entre projetos...");
         var ordered = PackageAligner.TopologicalOrder(migrated);
         await PackageAligner.AlignAsync(ordered, nuget);
-        foreach (var project in migrated.Where(p => p.Spec != null))
-            project.Plan.Write(project.Result.OutputProjectPath!, ProjectFileWriter.Write(project.Spec!));
-
         List<(ProjectResult Result, ApplicationProfile Profile)>? profiles = null;
         if (options.Cloud == CloudTarget.Aws)
         {
             progress?.Report("Avaliando arquitetura alvo na AWS...");
-            profiles = AdviseCloud(result, migrated, ordered);
+            profiles = AdviseCloud(result, migrated, ordered); // may add Lambda packages/properties to the specs
         }
+
+        foreach (var project in migrated.Where(p => p.Spec != null))
+            project.Plan.Write(project.Result.OutputProjectPath!, ProjectFileWriter.Write(project.Spec!));
 
         if (!options.DryRun)
         {
@@ -216,13 +216,8 @@ public sealed class MigrationEngine
             if (hosting.Primary is AwsHosting.NotDeployable or AwsHosting.Desktop || project.Result.OutputProjectPath == null) continue;
             if (hosting.Primary == AwsHosting.Lambda)
             {
-                project.Result.Inventory.Add(new InventoryItem
-                {
-                    Project = project.Result.Project.Name, Severity = InventorySeverity.Info, Category = InventoryCategory.ProjectFile, RuleId = "AWS-LAMBDA",
-                    Title = "Recomendado como AWS Lambda: sem Dockerfile, empacotar com Amazon.Lambda.Tools",
-                    Description = "Automação orientada a evento; o ponto de entrada precisa virar um handler (Amazon.Lambda.Core) com o gatilho indicado na arquitetura.",
-                    Suggestion = "Se preferir manter o Main() sem alterações, use a alternativa 'tarefa ECS agendada' e gere o Dockerfile rodando com --cloud aws após ajustar."
-                });
+                if (project.Spec != null)
+                    LambdaScaffolder.Scaffold(project.Result.Project, merged, project.Spec, project.Plan, project.Result.RelativeDir, project.Result.Inventory);
                 continue;
             }
             var dependencies = closure.Where(c => c.Result.OutputProjectPath != null).Select(c => c.Result.OutputProjectPath!).ToList();

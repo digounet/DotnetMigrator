@@ -110,6 +110,16 @@ public static partial class ProjectMigrator
         var profile = ApplicationProfiler.Analyze(project, originalCode, LoadConfig(project));
         result.Modernizations.AddRange(ModernizationAdvisor.Analyze(project, profile, originalCode, ctx.Cloud));
 
+        // Windows Service → Worker Service (BackgroundService): deterministic, so the project can run in a Linux container.
+        var workers = project.Kind == ProjectKind.WindowsService ? WorkerServiceRewriter.Discover(originalCode) : new WorkerServiceInfo();
+        if (workers.Any)
+        {
+            PrepareWorkerConversion(project, entries, workers, plan, result.RelativeDir, items);
+            codeEntries = entries.Where(e => e.Role == Role.Code).ToList();
+            profile.Signals.Remove(Signal.WindowsServiceHost);
+            result.Modernizations.RemoveAll(m => m.RuleId == "MOD-WIN-SERVICE");
+        }
+
         var catalog = ControllerCatalog.Build(codeEntries.Select(e => e.Text!));
         var legacyCode = entries.Where(e => e.Role == Role.LegacyCode).ToList();
         var startup = isWeb
@@ -153,9 +163,32 @@ public static partial class ProjectMigrator
         {
             var area = AreaController().Match(entry.Unix) is { Success: true } m ? m.Groups[1].Value : null;
             var (rewritten, controllerChanges, rewriter) = ControllerRewriter.Rewrite(entry.Text!, catalog, startup.ApiRouteTemplate, area);
+            if (workers.Any)
+            {
+                var (workerText, workerChanges, workerRewriter) = WorkerServiceRewriter.Rewrite(rewritten);
+                if (workerChanges.Count > 0)
+                {
+                    rewritten = workerText;
+                    Track(workerChanges, entry.Unix);
+                    facts.ConvertedWindowsService = true;
+                    foreach (var warning in workerRewriter.Warnings)
+                        items.Add(Item(project, InventorySeverity.Warning, InventoryCategory.Code, "CS-WORKER-UNSUPPORTED", warning,
+                            "BackgroundService só tem ExecuteAsync/StopAsync; eventos do SCM (pausa, desligamento, comandos) não existem em containers.",
+                            "Mova a lógica para StopAsync/ExecuteAsync ou remova o método.", entry.Unix));
+                }
+            }
             var (transformed, regexChanges, fileFacts) = CodeTransformer.Transform(rewritten, new CodeTransformOptions(config.Log4NetExtracted, isWeb));
             facts.Merge(fileFacts);
             Track(controllerChanges.Concat(regexChanges), entry.Unix);
+            if (fileFacts.RewroteConfiguration && project.Kind is ProjectKind.Console or ProjectKind.WindowsService)
+            {
+                var (injected, injectChanges) = ConfigurationInjector.Inject(transformed);
+                if (injectChanges.Count > 0)
+                {
+                    transformed = injected;
+                    Track(injectChanges, entry.Unix);
+                }
+            }
 
             foreach (var warning in rewriter.RouteWarnings)
                 items.Add(Item(project, InventorySeverity.Warning, InventoryCategory.Code, "CS-WEBAPI-AMBIGUOUS",
@@ -251,6 +284,32 @@ public static partial class ProjectMigrator
         }
 
         return new MigratedProject(result, spec, plan, profile);
+    }
+
+    /// <summary>Moves the service designer and the ServiceBase.Run Program.cs to _Legacy and writes the generic-host Program.cs.</summary>
+    private static void PrepareWorkerConversion(ProjectInfo project, List<Entry> entries, WorkerServiceInfo workers, OutputPlan plan, string projectOut, List<InventoryItem> items)
+    {
+        var serviceFiles = entries.Where(e => e.Role == Role.Code && e.Text != null && workers.Services.Any(w => e.Text.Contains($"class {w.ClassName}", StringComparison.Ordinal) && e.Text.Contains("ServiceBase", StringComparison.Ordinal)))
+            .Select(e => Path.Combine(Path.GetDirectoryName(e.Relative) ?? "", Path.GetFileNameWithoutExtension(e.Relative)))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        void ToLegacy(Entry entry)
+        {
+            entry.Role = Role.LegacyCode;
+            entry.Destination = Path.Combine(projectOut, "_Legacy", entry.Relative);
+        }
+
+        foreach (var entry in entries.Where(e => e.Role == Role.Code && e.Relative.EndsWith(".Designer.cs", StringComparison.OrdinalIgnoreCase)).ToList())
+            if (serviceFiles.Contains(entry.Relative[..^".Designer.cs".Length])) ToLegacy(entry);
+
+        var program = entries.FirstOrDefault(e => e.Role == Role.Code && e.Text != null && e.Text.Contains("ServiceBase.Run(", StringComparison.Ordinal));
+        if (program != null) ToLegacy(program);
+        plan.Write(Path.Combine(projectOut, program?.Relative ?? "Program.cs"), WorkerServiceRewriter.GenerateProgram(project.Name, workers));
+
+        items.Add(Item(project, InventorySeverity.Info, InventoryCategory.Code, "CS-WORKER-PROGRAM",
+            $"Windows Service convertido em Worker Service: {string.Join(", ", workers.Services.Select(w => w.ClassName))}",
+            $"ServiceBase → BackgroundService (OnStart → ExecuteAsync, OnStop → StopAsync); Program.cs gerado com Host.CreateApplicationBuilder + AddWindowsService() + AddHostedService; o Program.cs e o designer originais foram para _Legacy/. O projeto passa a net10.0 e pode rodar em container Linux.",
+            "Revise ExecuteAsync: laços 'while (true)' devem observar stoppingToken e Thread.Sleep deve virar await Task.Delay(..., stoppingToken) para o container encerrar no SIGTERM.", program?.Relative ?? "Program.cs", auto: true));
     }
 
     private static void WriteSecretsArtifacts(ProjectInfo project, SecretsPlan secrets, OutputPlan plan, string projectOut, List<InventoryItem> items)
@@ -562,13 +621,27 @@ public static partial class ProjectMigrator
 
         if (isWeb && catalog.Api.Count > 0)
             Need("Microsoft.AspNetCore.Mvc.NewtonsoftJson", VersionPolicy.DotNet, "Mantém a serialização JSON do Web API 2 (Newtonsoft, nomes de propriedades sem camelCase) para não quebrar clientes existentes.");
-        if (project.Kind == ProjectKind.WindowsService)
+        if (project.Kind == ProjectKind.WindowsService && facts.ConvertedWindowsService)
+        {
+            Need("Microsoft.Extensions.Hosting", VersionPolicy.DotNet, "Host genérico (Host.CreateApplicationBuilder) para o Worker Service.");
+            Need("Microsoft.Extensions.Hosting.WindowsServices", VersionPolicy.DotNet, "AddWindowsService(): mantém a instalação como serviço do Windows on-premises; sem efeito em Linux.");
+            if (codeTexts.Any(t => t.Contains("ServiceController", StringComparison.Ordinal)))
+                Need("System.ServiceProcess.ServiceController", VersionPolicy.DotNet, "ServiceController ainda é usado no código.");
+        }
+        else if (project.Kind == ProjectKind.WindowsService)
             Need("System.ServiceProcess.ServiceController", VersionPolicy.DotNet, "ServiceBase continua funcionando no .NET 10 (Windows).");
         if (facts.UsesLegacyConfigurationApi || keepAppConfig)
             Need("System.Configuration.ConfigurationManager", VersionPolicy.DotNet, "Compatibilidade para APIs de System.Configuration que ainda são usadas no código.");
         if (facts.RewroteConfiguration && !isWeb)
-            Need(project.Kind is ProjectKind.ClassLibrary ? "Microsoft.Extensions.Configuration.Abstractions" : "Microsoft.Extensions.Configuration.Json",
-                VersionPolicy.DotNet, "Fornece IConfiguration para as leituras de configuração reescritas.");
+        {
+            if (project.Kind is ProjectKind.ClassLibrary)
+                Need("Microsoft.Extensions.Configuration.Abstractions", VersionPolicy.DotNet, "Fornece IConfiguration para as leituras de configuração reescritas.");
+            else
+            {
+                Need("Microsoft.Extensions.Configuration.Json", VersionPolicy.DotNet, "Lê appsettings*.json para as leituras de configuração reescritas.");
+                Need("Microsoft.Extensions.Configuration.EnvironmentVariables", VersionPolicy.DotNet, "Variáveis de ambiente (Secao__Chave) sobrepõem o appsettings: é por aí que o Secrets Manager injeta as credenciais.");
+            }
+        }
         if (facts.UsesSqlClient)
             Need("Microsoft.Data.SqlClient", VersionPolicy.Latest("7.1.1"), "O código usava System.Data.SqlClient e foi migrado para Microsoft.Data.SqlClient.");
         if (facts.UsesWcfClient)
@@ -589,6 +662,13 @@ public static partial class ProjectMigrator
         {
             var rule = FrameworkReferenceRules.Find(reference, project.Kind);
             if (rule.Action == FrameworkRefAction.Ignore) continue;
+            // After the Worker Service conversion the only System.ServiceProcess type that may remain is ServiceController.
+            if (facts.ConvertedWindowsService && reference.Equals("System.ServiceProcess", StringComparison.OrdinalIgnoreCase) &&
+                !codeTexts.Any(t => t.Contains("ServiceController", StringComparison.Ordinal)))
+            {
+                unused.Add(reference);
+                continue;
+            }
             var mentioned = codeTexts.Any(t => t.Contains(reference + ".", StringComparison.Ordinal) || t.Contains("using " + reference + ";", StringComparison.Ordinal));
             if (!mentioned)
             {
@@ -637,7 +717,7 @@ public static partial class ProjectMigrator
         var spec = new ProjectFileSpec();
         var isWeb = project.Kind == ProjectKind.Web;
         var hasViews = entries.Any(e => e.Role == Role.View);
-        var windows = project.Kind is ProjectKind.Desktop or ProjectKind.WindowsService;
+        var windows = project.Kind is ProjectKind.Desktop || (project.Kind == ProjectKind.WindowsService && !facts.ConvertedWindowsService);
 
         spec.Sdk = isWeb ? "Microsoft.NET.Sdk.Web" : hasViews ? "Microsoft.NET.Sdk.Razor" : "Microsoft.NET.Sdk";
         var props = spec.Properties;

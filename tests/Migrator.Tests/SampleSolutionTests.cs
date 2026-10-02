@@ -54,7 +54,8 @@ public sealed class SampleSolutionTests : IDisposable
         Assert.Contains(web.Modernizations, m => m.RuleId == "MOD-SEC-SECRETS" && m.Evidence!.Contains("network/@password"));
         Assert.Contains(web.Modernizations, m => m.RuleId == "MOD-SEC-SECRETS-CODE" && m.Evidence!.Contains("TokenIntegracaoErp"));
         Assert.Contains(web.Inventory, i => i.RuleId == "CFG-SECRETS-EXTRACTED" && i.Suggestion.Contains("Secrets Manager"));
-        Assert.Contains(worker.Modernizations, m => m.RuleId == "MOD-WIN-SERVICE");
+        Assert.DoesNotContain(worker.Modernizations, m => m.RuleId == "MOD-WIN-SERVICE"); // converted deterministically
+        Assert.Contains(worker.Inventory, i => i.RuleId == "CS-WORKER-PROGRAM");
         Assert.Contains(worker.Modernizations, m => m.RuleId == "MOD-ARCH-DB-INTEGRATED");
         Assert.Contains(worker.Modernizations, m => m.RuleId == "MOD-ARCH-HYBRID" && m.Evidence!.Contains("erp.interno"));
         Assert.Contains(result.Projects[1].Modernizations, m => m.RuleId == "MOD-PKG-EF6");
@@ -176,7 +177,32 @@ public sealed class SampleSolutionTests : IDisposable
         Assert.Contains(result.Projects[0].Inventory, i => i.RuleId == "AWS-DOCKERFILE" && i.AutoMigrated);
 
         var worker = Read("LegacyShop.Worker/LegacyShop.Worker.csproj");
-        Assert.Contains("<TargetFramework>net10.0-windows</TargetFramework>", worker);
+        // Windows Service converted to a Worker Service: Linux-capable TFM, generic host packages, no ServiceController
+        Assert.Contains("<TargetFramework>net10.0</TargetFramework>", worker);
+        Assert.Contains("Microsoft.Extensions.Hosting.WindowsServices", worker);
+        Assert.DoesNotContain("System.ServiceProcess.ServiceController", worker);
+        var service = Read("LegacyShop.Worker/SincronizacaoService.cs");
+        Assert.Contains(": BackgroundService", service);
+        Assert.Contains("protected override Task ExecuteAsync(CancellationToken stoppingToken)", service);
+        Assert.Contains("public override Task StopAsync(CancellationToken cancellationToken)", service);
+        Assert.DoesNotContain("InitializeComponent();", service);
+        Assert.Contains("AddHostedService<SincronizacaoService>()", Read("LegacyShop.Worker/Program.cs"));
+        Assert.Contains("ServiceName = \"LegacyShopSincronizacao\"", Read("LegacyShop.Worker/Program.cs"));
+        Assert.True(Exists("LegacyShop.Worker/_Legacy/Program.cs"));
+        Assert.True(Exists("LegacyShop.Worker/_Legacy/SincronizacaoService.Designer.cs"));
+        Assert.False(Exists("LegacyShop.Worker/SincronizacaoService.Designer.cs"));
+        Assert.Contains(result.Projects[2].Inventory, i => i.RuleId == "CS-WORKER-PROGRAM" && i.AutoMigrated);
+        Assert.DoesNotContain(result.Projects[2].Modernizations, m => m.RuleId == "MOD-WIN-SERVICE");
+        Assert.DoesNotContain("ServiceBase", Read("LegacyShop.Worker/Dockerfile"));
+
+        // Lambda scaffold for the event-driven automation
+        Assert.True(Exists("LegacyShop.Importador/Function.cs"));
+        Assert.Contains("FunctionHandler(S3Event evt, ILambdaContext context)", Read("LegacyShop.Importador/Function.cs"));
+        Assert.Contains("LegacyShop.Importador::LegacyShop.Importador.Function::FunctionHandler", Read("LegacyShop.Importador/aws-lambda-tools-defaults.json"));
+        var importadorCsproj = Read("LegacyShop.Importador/LegacyShop.Importador.csproj");
+        Assert.Contains("Amazon.Lambda.Core", importadorCsproj);
+        Assert.Contains("Amazon.Lambda.S3Events", importadorCsproj);
+        Assert.Contains("<AWSProjectType>Lambda</AWSProjectType>", importadorCsproj);
         Assert.Contains("<Deterministic>false</Deterministic>", worker);
         Assert.Contains("<PlatformTarget>x64</PlatformTarget>", worker);
         Assert.True(Exists("LegacyShop.Worker/App.config"));

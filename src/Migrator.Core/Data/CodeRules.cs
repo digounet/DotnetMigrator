@@ -31,7 +31,7 @@ public static class CodeRules
         new("CFG001", @"\bconfiguration(\[""AppSettings:|\.GetConnectionString\(|\[""ConnectionStrings:)", InventorySeverity.Breaking,
             "ConfigurationManager reescrito: injetar IConfiguration",
             "As leituras de ConfigurationManager.AppSettings/ConnectionStrings foram reescritas para configuration[\"AppSettings:Chave\"] / configuration.GetConnectionString(\"Nome\") (as chaves estão no appsettings.json), mas a variável 'configuration' precisa existir.",
-            "Adicione um parâmetro 'IConfiguration configuration' no construtor (ou use IOptions<T> com uma classe de opções) e registre a classe no DI. Para classes estáticas, inicialize-as no Program.cs com builder.Configuration.",
+            "Adicione um parâmetro 'IConfiguration configuration' no construtor (ou use IOptions<T> com uma classe de opções) e registre a classe no DI. Para classes estáticas, inicialize-as no Program.cs com builder.Configuration. (Na classe do Main de consoles e em BackgroundServices convertidos a ferramenta já faz isso.)",
             FileMustNotMatch: @"\bIConfiguration\s+configuration\b"),
         new("WEB002", @"\bServer\.MapPath\(|\bHostingEnvironment\.MapPath\(|\bHttpRuntime\.AppDomainAppPath\b|\bHttpContext\.Server\b", InventorySeverity.Breaking,
             "Server.MapPath / HostingEnvironment.MapPath",

@@ -20,6 +20,8 @@ public sealed class CodeFacts
     public bool UsesMemoryCache { get; set; }
     public bool UsesOutputCache { get; set; }
     public bool HasMainMethod { get; set; }
+    /// <summary>Set by ProjectMigrator when WorkerServiceRewriter converted ServiceBase classes to BackgroundService.</summary>
+    public bool ConvertedWindowsService { get; set; }
 
     public void Merge(CodeFacts other)
     {
@@ -37,6 +39,7 @@ public sealed class CodeFacts
         UsesNewtonsoftAttributes |= other.UsesNewtonsoftAttributes;
         UsesMemoryCache |= other.UsesMemoryCache;
         HasMainMethod |= other.HasMainMethod;
+        ConvertedWindowsService |= other.ConvertedWindowsService;
     }
 }
 
