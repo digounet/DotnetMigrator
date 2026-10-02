@@ -43,8 +43,56 @@ public sealed class SampleSolutionTests : IDisposable
         Assert.Contains(worker.Inventory, i => i.RuleId == "NET002");
         Assert.Contains(worker.Inventory, i => i.RuleId == "CS-ENCODING");
 
-        foreach (var file in new[] { "migration-report.html", "migration-report.md", "inventory.csv", "inventory.xlsx" })
+        foreach (var file in new[] { "migration-report.html", "migration-report.md", "inventory.csv", "inventory.xlsx", "modernization.csv" })
             Assert.True(File.Exists(Path.Combine(reportDir, file)), file);
+
+        // Modernization advice and AWS architecture
+        Assert.Contains(web.Modernizations, m => m.RuleId == "MOD-PKG-AUTOMAPPER" && m.Kind == ModernizationKind.License);
+        Assert.Contains(web.Modernizations, m => m.RuleId == "MOD-PKG-ITEXTSHARP");
+        Assert.Contains(web.Modernizations, m => m.RuleId == "MOD-ARCH-SESSION");
+        Assert.Contains(web.Modernizations, m => m.RuleId == "MOD-CS-STATIC-STATE");   // static List<Pedido> in PedidosController
+        Assert.Contains(web.Modernizations, m => m.RuleId == "MOD-SEC-SECRETS");
+        Assert.Contains(worker.Modernizations, m => m.RuleId == "MOD-WIN-SERVICE");
+        Assert.Contains(worker.Modernizations, m => m.RuleId == "MOD-ARCH-DB-INTEGRATED");
+        Assert.Contains(worker.Modernizations, m => m.RuleId == "MOD-ARCH-HYBRID" && m.Evidence!.Contains("erp.interno"));
+        Assert.Contains(result.Projects[1].Modernizations, m => m.RuleId == "MOD-PKG-EF6");
+        Assert.Empty(result.Projects[3].Modernizations);
+
+        Assert.Equal(AwsHosting.EcsFargate, web.Hosting!.Primary);
+        Assert.Empty(web.Hosting.HardWindowsDependencies); // System.Drawing/EnterpriseServices are unused template references
+        Assert.Equal(AwsHosting.EcsScheduledTask, worker.Hosting!.Primary);
+        Assert.Equal(AwsHosting.NotDeployable, result.Projects[1].Hosting!.Primary);
+
+        var arch = result.Architecture!;
+        var services = arch.Components.Select(c => c.Id).ToList();
+        foreach (var id in new[] { "ecs", "ecr", "alb", "rds-sqlserver", "s3", "ses", "elasticache", "secrets", "ssm", "cloudwatch", "eventbridge", "vpn", "cicd" })
+            Assert.Contains(id, services);
+        Assert.Equal(["LegacyShop.Web", "LegacyShop.Worker"], arch.Components.Single(c => c.Id == "ses").UsedBy);
+        Assert.Contains("erp.interno", arch.Components.Single(c => c.Id == "vpn").Replaces);
+        Assert.Contains("LegacyShop_Web --> rds_sqlserver", arch.Diagram);
+        Assert.Contains("eventbridge -- agenda --> LegacyShop_Worker", arch.Diagram);
+        Assert.Contains("ECS Fargate (Linux) + ALB", arch.Summary);
+        Assert.NotEmpty(arch.Phases);
+        Assert.Contains(arch.Risks, r => r.Contains("Integrated Security"));
+
+        var markdown = File.ReadAllText(Path.Combine(reportDir, "migration-report.md"));
+        Assert.Contains("## Arquitetura alvo (AWS)", markdown);
+        Assert.Contains("```mermaid", markdown);
+        Assert.Contains("## Modernização", markdown);
+    }
+
+    [Fact]
+    public async Task Cloud_none_disables_architecture_and_cloud_items()
+    {
+        var result = await new MigrationEngine().RunAsync(new MigrationOptions
+        {
+            InputPath = SampleSolution(), DryRun = true, Offline = true, ReportDir = Path.Combine(_work, "report-none"), Cloud = CloudTarget.None
+        });
+        Assert.Null(result.Architecture);
+        Assert.All(result.Projects, p => Assert.Null(p.Hosting));
+        Assert.DoesNotContain(result.AllModernizations, m => m.Kind == ModernizationKind.Cloud);
+        Assert.Contains(result.AllModernizations, m => m.RuleId == "MOD-PKG-AUTOMAPPER");
+        Assert.DoesNotContain(result.AllItems, i => i.RuleId == "AWS-DOCKERFILE");
     }
 
     [Fact]
@@ -79,6 +127,14 @@ public sealed class SampleSolutionTests : IDisposable
         Assert.Contains("<Compile Include=\"..\\Shared\\VersaoInfo.cs\" Link=\"Properties\\VersaoInfo.cs\" />", core);
         Assert.Contains("<EmbeddedResource Include=\"Sql\\ConsultaDestaques.sql\" />", core);
         Assert.Contains("<SolutionDir Condition=", core);
+
+        Assert.True(Exists("LegacyShop.Web/Dockerfile"));
+        Assert.True(Exists("LegacyShop.Worker/Dockerfile"));
+        Assert.False(Exists("LegacyShop.Core/Dockerfile"));
+        Assert.True(Exists(".dockerignore"));
+        Assert.Contains("mcr.microsoft.com/dotnet/aspnet:10.0 AS final", Read("LegacyShop.Web/Dockerfile"));
+        Assert.Contains("app.MapHealthChecks(\"/health\")", Read("LegacyShop.Web/Program.cs"));
+        Assert.Contains(result.Projects[0].Inventory, i => i.RuleId == "AWS-DOCKERFILE" && i.AutoMigrated);
 
         var worker = Read("LegacyShop.Worker/LegacyShop.Worker.csproj");
         Assert.Contains("<TargetFramework>net10.0-windows</TargetFramework>", worker);

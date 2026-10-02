@@ -2,11 +2,14 @@
 
 Ferramenta de linha de comando que lê uma aplicação .NET Framework inteira (solução, projeto ou diretório), gera uma **cópia** migrada para .NET 10, compila essa cópia e produz um **inventário** do que ainda exige ação manual, com uma sugestão para cada item. O código original nunca é alterado.
 
+Além da migração, a ferramenta **entende a aplicação** e entrega duas camadas de recomendação: **modernização** (bibliotecas que passaram a ser pagas ou foram descontinuadas, código C# que compila mas muda de comportamento no .NET 10/Linux, idiomas antigos) e **arquitetura alvo na AWS** (qual serviço hospeda cada projeto — ECS Fargate, tarefa agendada, Lambda, containers Windows — e quais serviços gerenciados substituem banco, filas, arquivos, e-mail, sessão, segredos e agendamento), com Dockerfiles gerados, diagrama e plano de migração. Foi pensada para programas de migração em lote: dezenas de aplicações, mesmo pipeline, mesma arquitetura de referência.
+
 Tipos de projeto suportados: ASP.NET MVC 5, ASP.NET Web API 2, console, Windows Service, bibliotecas e testes (MSTest/NUnit/xUnit). Projetos WinForms/WPF recebem apenas a conversão do `.csproj` (`net10.0-windows`). Projetos VB.NET, Web Site (sem `.csproj`) e de banco de dados aparecem no inventário como não migrados.
 
 - [Resumo](#resumo)
 - [Início rápido](#início-rápido)
 - [Como funciona](#como-funciona)
+- [Modernização e arquitetura AWS](#modernização-e-arquitetura-aws)
 - [Exemplo: antes e depois](#exemplo-antes-e-depois)
 - [Lendo o inventário](#lendo-o-inventário)
 - [Fluxo de trabalho recomendado](#fluxo-de-trabalho-recomendado)
@@ -108,6 +111,10 @@ As duas operações executam o mesmo pipeline. `analyze` roda tudo em memória e
 10. Gravação da saída ........... cópia migrada + .slnx            (só migrate)
 11. Build de verificação ........ dotnet build por projeto           (só migrate)
 12. Relatórios .................. HTML, Markdown, Excel, CSV
+   (em paralelo, por projeto)
+ M. Perfil da aplicação ......... sinais de arquitetura (banco, arquivos, filas, SMTP, sessão, agendamento, Windows...)
+ N. Modernização ................ regras de pacotes + regras de código C# + sinais → sugestões
+ A. Arquitetura AWS ............. hospedagem por projeto, serviços, Dockerfile, diagrama, plano
 ```
 
 Cada etapa registra o que fez no inventário: o que foi resolvido automaticamente e o que ficou pendente.
@@ -287,9 +294,51 @@ Depois de planejar todos os projetos, a ferramenta percorre a solução em ordem
 |---|---|
 | `migration-report.html` | relatório navegável: resumo, tabela de projetos, filtros por severidade e busca, erros de build agrupados por código |
 | `migration-report.md` | versionar no repositório, anexar em PR ou wiki |
-| `inventory.xlsx` | abas Resumo e Inventário, com filtros, para estimar e distribuir o trabalho |
+| `inventory.xlsx` | abas Resumo, Inventário, Modernização e Arquitetura AWS, com filtros, para estimar e distribuir o trabalho |
 | `inventory.csv` | integração com outras ferramentas (UTF-8 com BOM) |
+| `modernization.csv` | sugestões de modernização e arquitetura (tipo, impacto, esforço, evidência, serviço AWS) |
 | `build-verification.log` | saída completa do build |
+
+---
+
+## Modernização e arquitetura AWS
+
+Enquanto migra, a ferramenta monta um **perfil** de cada projeto a partir do código original, dos pacotes, das referências de framework e do `web.config`/`app.config`: que banco usa (e se a connection string usa Integrated Security), se grava arquivos em disco ou em pastas de rede, se consome MSMQ/RabbitMQ, se envia e-mail por SMTP, se guarda sessão em memória ou estado em coleções estáticas, se tem timers/agendadores, que autenticação usa, se depende de componentes Windows (COM, Registro, System.Drawing, Event Log, WMI, Crystal Reports...), se tem segredos em texto claro e quais hosts internos acessa. Bibliotecas são **fundidas** nos projetos que as referenciam, então a recomendação de um site considera o que as DLLs dele fazem.
+
+### Modernização
+
+Sugestões que **não bloqueiam a compilação** e por isso ficam separadas do inventário (não entram no percentual de automação nem no código de saída). Cada item tem tipo, impacto, esforço, evidência (pacote ou `arquivo:linha`) e, quando se aplica, o serviço AWS relacionado.
+
+| Tipo | O que detecta | Exemplos |
+|---|---|---|
+| **Licença** | bibliotecas que passaram a ser comerciais; a ferramenta mantém a última versão gratuita e propõe alternativas | AutoMapper 15+ → Mapperly; MediatR 13+ → Mediator (source generator); FluentAssertions 8+ → AwesomeAssertions; EPPlus 5+ → ClosedXML; MassTransit 9+ → AWS.Messaging (SQS/SNS); iTextSharp (AGPL) → QuestPDF; suites comerciais (Telerik, DevExpress...) |
+| **Descontinuado** | sem manutenção ou sem versão para .NET 10 | Topshelf, Common.Logging, DotNetZip (CVE), Rotativa/wkhtmltopdf, Crystal Reports, ReportViewer, IdentityServer4, DotNetOpenAuth, Enterprise Library |
+| **Modernização** | alternativa mais simples/rápida ou código C# que **compila mas muda de comportamento** | `Encoding.GetEncoding(1252)` sem provider (exceção em runtime), `Encoding.Default` (virou UTF-8), parse/formatação sem cultura (container sem `LANG` usa cultura invariante), comparações de string com ICU, `string.GetHashCode()` persistido (aleatório por processo), `new HttpClient()` por chamada, `.Result`/`.Wait()`, `async void`, threads manuais, `ArrayList`, DataSet, EF6 → EF Core, Newtonsoft → System.Text.Json |
+| **Cloud (AWS)** | o que precisa mudar para rodar em container/serviços gerenciados | MSMQ → SQS; arquivos/UNC → S3 (ou EFS); SMTP → SES; sessão InProc → ElastiCache; chaves do Data Protection fora do container; `TransactionScope` (sem MSDTC no Linux); `DateTime.Now` (container em UTC); caminhos com `\` e maiúsculas (Linux é case-sensitive); `Process.Start`; IP/HTTPS atrás do ALB; Windows Service → BackgroundService; System.Drawing/Event Log/Registro/COM; Integrated Security no RDS; hosts on-premises (VPN); Azure Storage/Service Bus/Key Vault → S3/SQS/Secrets Manager |
+| **Segurança** | riscos que a migração é um bom momento para corrigir | senhas no config → Secrets Manager; MD5/SHA1/DES/Rijndael; `Random` para tokens; SQL por concatenação; catch vazio |
+
+### Arquitetura alvo (AWS)
+
+Para cada projeto publicável a ferramenta recomenda **onde rodar** e por quê, com pré-requisitos e alternativas:
+
+| Projeto | Recomendação padrão | Quando muda |
+|---|---|---|
+| Web (MVC/Web API) | **ECS Fargate (Linux) atrás de um ALB** — padrão de menor operação para um portfólio | Dependência dura de Windows (COM, Registro, Office Interop, Crystal, WMI, P/Invoke) → **containers Windows no ECS**; IIS em código → **EC2 Windows**. API sem views/sessão → alternativa **Lambda**; app interna simples → alternativa **App Runner** |
+| Windows Service / console com timer ou Quartz/Hangfire | **tarefa ECS Fargate agendada pelo EventBridge Scheduler** (paga só a execução) | alternativa Lambda se < 15 min |
+| Windows Service consumindo fila (MSMQ/RabbitMQ/MassTransit) | **worker ECS Fargate consumindo SQS**, escalado pela profundidade da fila | alternativa Lambda com gatilho SQS |
+| Biblioteca / testes | não publicável (empacotada nos consumidores / roda no CI) | — |
+| Desktop | fora da AWS (ou AppStream 2.0) | — |
+
+Dependências Windows "moles" (System.Drawing, Event Log, PerformanceCounter, ServiceBase, MSMQ, Windows Auth, pastas UNC) **não** forçam containers Windows: a recomendação continua Linux e lista o que substituir (itens `MOD-WIN-*`).
+
+Na solução como um todo, a ferramenta monta a lista de **serviços** (obrigatórios e recomendados) com o que cada um substitui e quem usa — RDS (engine conforme as connection strings), S3/EFS, SQS/SNS ou Amazon MQ, SES, ElastiCache, Secrets Manager, Parameter Store, CloudWatch, EventBridge Scheduler, Cognito ou Managed AD, CloudFront, VPN/Direct Connect quando há hosts internos, ECR e pipeline de CI/CD —, um **diagrama Mermaid**, um **plano em fases**, **riscos** e **notas de custo** (containers Windows ≈ 2x, licença do SQL Server no RDS e a opção Aurora PostgreSQL/Babelfish, NAT Gateway, retenção de logs).
+
+No `migrate`, a saída já vem **pronta para container**:
+
+- `Dockerfile` por projeto publicável (multi-stage, build a partir da raiz da solução, porta 8080, usuário não-root, `TZ`/`LANG` definidos quando a aplicação depende de fuso/cultura; imagens Windows quando a recomendação exige) e `.dockerignore` na raiz;
+- `Program.cs` com `/health` (target group do ALB), `UseForwardedHeaders` (IP e esquema reais atrás do balanceador) e cultura padrão para threads fora de requisição.
+
+Tudo isso aparece no relatório HTML (seções "Arquitetura alvo (AWS)" e "Modernização"), no Markdown (com o diagrama renderizável no GitHub/Azure DevOps), no Excel (abas "Modernização" e "Arquitetura AWS") e em `modernization.csv`. Para desligar: `--cloud none` (remove a arquitetura, os Dockerfiles e as sugestões do tipo Cloud; as demais continuam).
 
 ---
 
@@ -438,8 +487,8 @@ dotnet run --project src/Migrator.Cli -- migrate samples\LegacyShop\LegacyShop.s
 ## Referência da linha de comando
 
 ```
-migrator analyze <entrada> [--report <pasta>] [--offline]
-migrator migrate <entrada> [--output <pasta>] [--report <pasta>] [--offline] [--force] [--no-build] [--build-timeout <min>]
+migrator analyze <entrada> [--report <pasta>] [--offline] [--cloud aws|none]
+migrator migrate <entrada> [--output <pasta>] [--report <pasta>] [--offline] [--cloud aws|none] [--force] [--no-build] [--build-timeout <min>]
 ```
 
 | Opção | Comando | Descrição |
@@ -448,6 +497,7 @@ migrator migrate <entrada> [--output <pasta>] [--report <pasta>] [--offline] [--
 | `--output`, `-o` | migrate | Pasta de saída (padrão: `<pasta-pai>\<nome-da-solução>.net10`) |
 | `--report`, `-r` | ambos | Pasta dos relatórios (padrão: `<saída>\_migration-report` no migrate; `<pasta-pai>\<nome>.migration-report` no analyze) |
 | `--offline` | ambos | Não consulta o nuget.org |
+| `--cloud` | ambos | Nuvem de destino da proposta de arquitetura e dos Dockerfiles: `aws` (padrão) ou `none` |
 | `--force` | migrate | Substitui uma saída anterior do Migrator |
 | `--no-build` | migrate | Pula o build de verificação |
 | `--build-timeout` | migrate | Tempo máximo do build de verificação em minutos (padrão 30) |
@@ -460,8 +510,11 @@ Atrás de proxy corporativo, defina `HTTPS_PROXY` antes de executar. Se o nuget.
 
 ```
 src/Migrator.Core
-  Analysis/     WorkspaceLoader (.sln/.slnx/pasta), ProjectLoader (.csproj), StartupAnalyzer (Global.asax/App_Start/OWIN), AssemblyInspector (DLLs)
-  Data/         PackageRules, FrameworkReferenceRules, CodeRules (C# e Razor), BuildHints
+  Analysis/     WorkspaceLoader (.sln/.slnx/pasta), ProjectLoader (.csproj), StartupAnalyzer (Global.asax/App_Start/OWIN), AssemblyInspector (DLLs),
+                ApplicationProfiler (sinais de arquitetura: banco, arquivos, filas, SMTP, sessão, agendamento, Windows, segredos...)
+  Cloud/        ModernizationAdvisor (pacotes + código + sinais → sugestões), AwsArchitect (hospedagem, serviços, Dockerfile, diagrama, plano)
+  Data/         PackageRules, FrameworkReferenceRules, CodeRules (C# e Razor), BuildHints,
+                ModernizationRules (pacotes: licença/descontinuados/equivalentes AWS), CodeModernizationRules (C# que compila mas muda)
   Migration/    MigrationEngine (orquestração), ProjectMigrator (por projeto), ControllerRewriter (Roslyn), CodeTransformer,
                 RazorTransformer/BundleConfigParser, ConfigMigrator, PackagePlanner, PackageAligner, ProjectFileWriter,
                 ProgramGenerator, BuildVerifier, TextFiles
@@ -491,5 +544,18 @@ new("EMP001", @"\bEmpresa\.Cache\.Get\(", InventorySeverity.Warning,
 ```
 
 **Dica para erro de compilação** (`BuildHints.cs`): acrescente o tipo em `TypeHints`, o membro em `MemberHints` ou o código do erro em `CodeHints`.
+
+**Nova sugestão de modernização por pacote** (`ModernizationRules.cs`, dicionário `ById` ou lista `ByPrefix`):
+
+```csharp
+["Empresa.Pdf.Legado"] = Deprecated("MOD-PKG-EMPRESA-PDF", Impact.Medium, Effort.Medium,
+    "Empresa.Pdf.Legado não tem versão para .NET 10",
+    "Depende de binários nativos Windows.",
+    "Use QuestPDF; para HTML→PDF, PuppeteerSharp em uma tarefa ECS."),
+```
+
+**Novo padrão de código C# que compila mas muda** (`CodeModernizationRules.cs`, lista `CSharp`): mesma forma das `CodeRules`, com `Kind`, `Impact`, `Effort`, filtro opcional por tipo de projeto (`OnlyKinds`) e `AwsService`.
+
+**Novo sinal de arquitetura** (`ApplicationProfiler.cs`): acrescente o valor no enum `Signal` e a regex em `CodeProbes` (ou o prefixo de pacote em `PackageProbes` / a referência em `FrameworkReferenceProbes`); depois use `profile.Has(Signal.X)` em `ModernizationAdvisor.FromProfile` (sugestão) e/ou em `AwsArchitect` (hospedagem/componente).
 
 **Testes**: `dotnet test Migrator.slnx`. Ao adicionar uma regra, inclua um caso em `tests/Migrator.Tests` e, se for um padrão comum, reproduza-o em `samples/LegacyShop`.

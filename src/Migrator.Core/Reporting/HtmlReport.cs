@@ -4,7 +4,7 @@ using Migrator.Core.Models;
 
 namespace Migrator.Core.Reporting;
 
-public static class HtmlReport
+public static partial class HtmlReport
 {
     private const int MaxBuildRowsPerGroup = 300;
 
@@ -13,7 +13,7 @@ public static class HtmlReport
         "Corrija, recompile e repita: os itens de Código/View acima já antecipam os pontos que aparecerão nas próximas rodadas.";
 
     private const string Css = """
-        :root { --red:#c5221f; --red-bg:#fce8e6; --amber:#b06000; --amber-bg:#fef7e0; --blue:#1967d2; --blue-bg:#e8f0fe; --green:#137333; --green-bg:#e6f4ea; --border:#dadce0; --muted:#5f6368; }
+        :root { --purple:#6a1b9a; --red:#c5221f; --red-bg:#fce8e6; --amber:#b06000; --amber-bg:#fef7e0; --blue:#1967d2; --blue-bg:#e8f0fe; --green:#137333; --green-bg:#e6f4ea; --border:#dadce0; --muted:#5f6368; }
         * { box-sizing: border-box; }
         body { margin: 0; font-family: "Segoe UI", system-ui, -apple-system, sans-serif; background: #f8f9fa; color: #202124; font-size: 14px; }
         header { background: #1a3a6b; color: #fff; padding: 24px 32px; }
@@ -24,7 +24,22 @@ public static class HtmlReport
         .card { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
         .card .n { font-size: 28px; font-weight: 600; }
         .card .l { color: var(--muted); font-size: 12px; margin-top: 4px; }
-        .card.red .n { color: var(--red); } .card.amber .n { color: var(--amber); } .card.green .n { color: var(--green); } .card.blue .n { color: var(--blue); }
+        .card.red .n { color: var(--red); } .card.amber .n { color: var(--amber); } .card.green .n { color: var(--green); } .card.blue .n { color: var(--blue); } .card.purple .n { color: var(--purple); }
+        .section-h { font-size: 18px; margin: 32px 0 12px; }
+        .panel .body { padding: 14px 16px; }
+        .panel p.lead { margin: 0 0 12px; line-height: 1.5; }
+        .panel h3 { margin: 18px 0 8px; font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+        .panel ol, .panel ul { margin: 0; padding-left: 22px; line-height: 1.5; }
+        .panel li { margin-bottom: 6px; }
+        .mermaid { background: #fff; padding: 12px; overflow: auto; font-size: 12px; }
+        .mermaid-note { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+        .badge.license { background: #fce8f3; color: #9c1b5d; } .badge.deprecated { background: #f1f3f4; color: #3c4043; } .badge.modernize { background: var(--blue-bg); color: var(--blue); }
+        .badge.cloud { background: #e6f0ff; color: #1b4fa5; } .badge.security { background: var(--red-bg); color: var(--red); }
+        .badge.high { background: var(--red-bg); color: var(--red); } .badge.medium { background: var(--amber-bg); color: var(--amber); } .badge.low { background: var(--green-bg); color: var(--green); }
+        .item.mod { border-left-color: var(--purple); }
+        .item .why { margin: 6px 0 0; color: #3c4043; }
+        td.wrap { max-width: 420px; }
+        .req { color: var(--green); font-weight: 600; } .opt { color: var(--muted); }
         table { width: 100%; border-collapse: collapse; background: #fff; }
         th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
         th { background: #f1f3f4; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); }
@@ -107,20 +122,28 @@ public static class HtmlReport
         Card(sb, "amber", warnings.ToString(), "Pontos de atenção");
         Card(sb, "green", automatic.ToString(), "Resolvidos automaticamente");
         if (result.BuildSucceeded != null) Card(sb, buildErrors > 0 ? "red" : "green", buildErrors.ToString(), "Erros no build de verificação");
+        var modernizations = result.AllModernizations.ToList();
+        if (modernizations.Count > 0) Card(sb, "purple", modernizations.Count.ToString(), "Sugestões de modernização");
         sb.Append("</div>");
 
         sb.Append("<div class=\"panel\"><h2>Projetos</h2><table><thead><tr><th>Projeto</th><th>Tipo</th><th>Origem</th>")
-          .Append("<th class=\"num\">Bloqueantes</th><th class=\"num\">Atenção</th><th class=\"num\">Automático</th><th class=\"num\">% automatizado</th><th>Build</th></tr></thead><tbody>");
+          .Append("<th class=\"num\">Bloqueantes</th><th class=\"num\">Atenção</th><th class=\"num\">Automático</th><th class=\"num\">% automatizado</th><th>Build</th>" + (result.Architecture != null ? "<th>AWS</th>" : "") + "</tr></thead><tbody>");
         foreach (var p in result.Projects)
         {
             var build = ReportWriter.BuildLabel(result, p);
             var buildClass = p.Build == null ? "" : p.Build.Succeeded ? "ok" : "fail";
             sb.Append($"<tr><td><a href=\"#p-{Anchor(p.Project.Name)}\">{E(p.Project.Name)}</a></td><td>{E(ReportWriter.KindLabel(p.Project.Kind))}</td><td>{E(p.Project.TargetFramework)}</td>")
               .Append($"<td class=\"num\">{p.Breaking.Count()}</td><td class=\"num\">{p.Warnings.Count()}</td><td class=\"num\">{p.Automatic.Count()}</td>")
-              .Append($"<td class=\"num\">{p.AutomationPercent}%</td><td class=\"{buildClass}\">{E(build)}</td></tr>");
+              .Append($"<td class=\"num\">{p.AutomationPercent}%</td><td class=\"{buildClass}\">{E(build)}</td>")
+              .Append(result.Architecture != null ? $"<td>{E(p.Hosting?.Primary.Short() ?? "—")}</td>" : "")
+              .Append("</tr>");
         }
         sb.Append("</tbody></table></div>");
 
+        if (result.Architecture != null) RenderArchitecture(sb, result);
+        if (modernizations.Count > 0) RenderModernization(sb, result, modernizations);
+
+        sb.Append("<h2 class=\"section-h\">Inventário da migração</h2>");
         sb.Append("<div class=\"filters\"><input id=\"q\" type=\"search\" placeholder=\"Filtrar por texto, arquivo, regra...\">");
         sb.Append("<label><input type=\"checkbox\" data-filter=\"breaking\" checked> Bloqueante</label>");
         sb.Append("<label><input type=\"checkbox\" data-filter=\"warning\" checked> Atenção</label>");

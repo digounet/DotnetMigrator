@@ -4,7 +4,7 @@ using NuGet.Versioning;
 
 namespace Migrator.Core.Migration;
 
-public sealed record MigratedProject(ProjectResult Result, ProjectFileSpec? Spec, OutputPlan Plan);
+public sealed record MigratedProject(ProjectResult Result, ProjectFileSpec? Spec, OutputPlan Plan, Analysis.ApplicationProfile Profile);
 
 /// <summary>Raises direct package versions so that no project downgrades a dependency (NU1605).</summary>
 public static class PackageAligner

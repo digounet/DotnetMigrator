@@ -3,7 +3,7 @@ using Migrator.Core.Models;
 
 namespace Migrator.Core.Reporting;
 
-public static class MarkdownReport
+public static partial class MarkdownReport
 {
     private const int MaxBuildExamples = 15;
 
@@ -22,11 +22,16 @@ public static class MarkdownReport
 
         sb.AppendLine("## Resumo");
         sb.AppendLine();
-        sb.AppendLine("| Projeto | Tipo | Origem | Bloqueantes | Atenção | Automático | % automatizado | Build |");
-        sb.AppendLine("|---|---|---|---:|---:|---:|---:|---|");
+        var aws = result.Architecture != null;
+        sb.AppendLine("| Projeto | Tipo | Origem | Bloqueantes | Atenção | Automático | % automatizado | Build |" + (aws ? " Modernização | AWS |" : ""));
+        sb.AppendLine("|---|---|---|---:|---:|---:|---:|---|" + (aws ? "---:|---|" : ""));
         foreach (var p in result.Projects)
-            sb.AppendLine($"| {Cell(p.Project.Name)} | {ReportWriter.KindLabel(p.Project.Kind)} | {Cell(p.Project.TargetFramework)} | {p.Breaking.Count()} | {p.Warnings.Count()} | {p.Automatic.Count()} | {p.AutomationPercent}% | {ReportWriter.BuildLabel(result, p)} |");
+            sb.AppendLine($"| {Cell(p.Project.Name)} | {ReportWriter.KindLabel(p.Project.Kind)} | {Cell(p.Project.TargetFramework)} | {p.Breaking.Count()} | {p.Warnings.Count()} | {p.Automatic.Count()} | {p.AutomationPercent}% | {ReportWriter.BuildLabel(result, p)} |" +
+                (aws ? $" {p.Modernizations.Count} | {Cell(p.Hosting?.Primary.Short() ?? "—")} |" : ""));
         sb.AppendLine();
+
+        if (result.Architecture != null) RenderArchitecture(sb, result);
+        RenderModernization(sb, result);
 
         if (result.GlobalItems.Count > 0)
         {

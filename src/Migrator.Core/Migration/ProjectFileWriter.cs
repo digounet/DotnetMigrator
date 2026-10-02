@@ -28,6 +28,7 @@ public static class ProjectFileWriter
         project.Add(new XElement("PropertyGroup", spec.Properties.Select(p => new XElement(p.Name, p.Value))));
 
         AddGroup(project, spec.FrameworkReferences.Select(f => new XElement("FrameworkReference", new XAttribute("Include", f))));
+        foreach (var item in spec.Items) NormalizePaths(item);
         AddGroup(project, spec.Items);
         AddGroup(project, spec.Packages.Select(p =>
         {
@@ -35,8 +36,8 @@ public static class ProjectFileWriter
             if (p.PrivateAssetsAll) element.Add(new XAttribute("PrivateAssets", "all"));
             return element;
         }));
-        AddGroup(project, spec.ProjectReferences.Select(r => new XElement("ProjectReference", new XAttribute("Include", r))));
-        AddGroup(project, spec.References.Select(r => new XElement("Reference", new XAttribute("Include", r.Name), new XElement("HintPath", r.HintPath))));
+        AddGroup(project, spec.ProjectReferences.Select(r => new XElement("ProjectReference", new XAttribute("Include", MsBuildPath(r)))));
+        AddGroup(project, spec.References.Select(r => new XElement("Reference", new XAttribute("Include", r.Name), new XElement("HintPath", MsBuildPath(r.HintPath)))));
 
         foreach (var raw in spec.RawElements)
         {
@@ -58,6 +59,18 @@ public static class ProjectFileWriter
             new XDocument(project).Save(writer);
 
         return (AddBlankLinesBetweenGroups(sb.ToString()) + "\n").Replace("\n", Environment.NewLine);
+    }
+
+    /// <summary>MSBuild accepts both separators, but the generated project should look the same whether the tool ran on Windows or Linux/macOS.</summary>
+    private static string MsBuildPath(string path) => path.Replace('/', '\\');
+
+    private static void NormalizePaths(XElement item)
+    {
+        foreach (var name in new[] { "Include", "Update", "Remove", "Link", "DependentUpon", "LastGenOutput" })
+            if (item.Attribute(name) is { } attribute && !attribute.Value.Contains("://", StringComparison.Ordinal))
+                attribute.Value = MsBuildPath(attribute.Value);
+        foreach (var child in item.Elements().Where(e => e.Name.LocalName is "Link" or "DependentUpon" or "LastGenOutput" or "HintPath"))
+            child.Value = MsBuildPath(child.Value);
     }
 
     private static void AddGroup(XElement project, IEnumerable<XElement> items)

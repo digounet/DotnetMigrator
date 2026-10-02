@@ -15,7 +15,8 @@ public sealed record WebProgramInput(
     bool KeepNewtonsoft,
     bool HasSwagger,
     bool UsesOutputCache,
-    bool Log4NetConfigFile);
+    bool Log4NetConfigFile,
+    bool CloudReady = true);
 
 public static class ProgramGenerator
 {
@@ -56,6 +57,23 @@ public static class ProgramGenerator
         services.AppendLine(mvc.Append(';').ToString());
 
         if (input.UsesHttpContextAccessor) services.AppendLine("builder.Services.AddHttpContextAccessor();");
+        if (input.CloudReady)
+        {
+            usings.Add("Microsoft.AspNetCore.HttpOverrides");
+            services.AppendLine("builder.Services.AddHealthChecks(); // GET /health para o target group do ALB / health check do ECS");
+            services.AppendLine("builder.Services.Configure<ForwardedHeadersOptions>(o =>");
+            services.AppendLine("{");
+            services.AppendLine("    // Atrás do Application Load Balancer: IP do cliente e esquema (https) vêm em X-Forwarded-*");
+            services.AppendLine("    o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;");
+            services.AppendLine("    o.KnownNetworks.Clear();");
+            services.AppendLine("    o.KnownProxies.Clear();");
+            services.AppendLine("});");
+        }
+        if (hints.Culture != null)
+        {
+            usings.Add("System.Globalization");
+            services.AppendLine($"CultureInfo.DefaultThreadCurrentCulture = CultureInfo.DefaultThreadCurrentUICulture = CultureInfo.GetCultureInfo(\"{hints.Culture}\"); // threads fora de requisição (containers sem LANG usam cultura invariante)");
+        }
         if (input.UsesOutputCache) services.AppendLine("builder.Services.AddOutputCache();");
         if (startup.LowercaseUrls) services.AppendLine("builder.Services.AddRouting(o => o.LowercaseUrls = true);");
         if (input.HasSwagger)
@@ -164,6 +182,7 @@ public static class ProgramGenerator
             foreach (var statement in pending) services.AppendLine($"//   {statement}");
         }
 
+        if (input.CloudReady) pipeline.AppendLine("app.UseForwardedHeaders();");
         pipeline.AppendLine("if (!app.Environment.IsDevelopment())");
         pipeline.AppendLine("{");
         pipeline.AppendLine($"    app.UseExceptionHandler(\"{hints.ErrorRedirect ?? (views ? "/Home/Error" : "/error")}\");");
@@ -203,6 +222,7 @@ public static class ProgramGenerator
                 pipeline.AppendLine($"app.MapControllerRoute(name: \"{route.Name}\", pattern: \"{route.Pattern}\"{Extra(route)});");
         }
         pipeline.AppendLine("app.MapControllers();");
+        if (input.CloudReady) pipeline.AppendLine("app.MapHealthChecks(\"/health\").AllowAnonymous();");
 
         sb.Append(string.Concat(usings.Select(u => $"using {u};\n")));
         sb.Append('\n');

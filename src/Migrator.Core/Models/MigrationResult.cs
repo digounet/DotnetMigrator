@@ -10,6 +10,8 @@ public sealed record MigrationOptions
     public bool VerifyBuild { get; init; } = true;
     public bool Force { get; init; }
     public TimeSpan BuildTimeout { get; init; } = TimeSpan.FromMinutes(30);
+    /// <summary>Cloud provider for the architecture proposal and container artifacts. None disables the advisor.</summary>
+    public CloudTarget Cloud { get; init; } = CloudTarget.Aws;
 }
 
 public sealed class ProjectResult
@@ -18,6 +20,8 @@ public sealed class ProjectResult
     public string RelativeDir { get; set; } = string.Empty;
     public string? OutputProjectPath { get; set; }
     public List<InventoryItem> Inventory { get; } = [];
+    public List<ModernizationItem> Modernizations { get; } = [];
+    public HostingRecommendation? Hosting { get; set; }
     public ProjectBuildStatus? Build { get; set; }
 
     public IEnumerable<InventoryItem> Breaking => Inventory.Where(i => i.RequiresAction && i.Severity == InventorySeverity.Breaking);
@@ -50,6 +54,8 @@ public sealed class SolutionResult
     public string? ReportDir { get; set; }
     public List<ProjectResult> Projects { get; } = [];
     public List<InventoryItem> GlobalItems { get; } = [];
+    public List<ModernizationItem> GlobalModernizations { get; } = [];
+    public ArchitectureProposal? Architecture { get; set; }
     public DateTime StartedAt { get; } = DateTime.Now;
     public DateTime FinishedAt { get; set; }
     public bool? BuildSucceeded { get; set; }
@@ -57,4 +63,5 @@ public sealed class SolutionResult
     public bool NuGetChecked { get; set; }
 
     public IEnumerable<InventoryItem> AllItems => GlobalItems.Concat(Projects.SelectMany(p => p.Inventory));
+    public IEnumerable<ModernizationItem> AllModernizations => GlobalModernizations.Concat(Projects.SelectMany(p => p.Modernizations));
 }

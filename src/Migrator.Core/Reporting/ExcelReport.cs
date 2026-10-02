@@ -3,7 +3,7 @@ using Migrator.Core.Models;
 
 namespace Migrator.Core.Reporting;
 
-public static class ExcelReport
+public static partial class ExcelReport
 {
     private const int MaxCellLength = 32000;
 
@@ -12,6 +12,8 @@ public static class ExcelReport
         using var workbook = new XLWorkbook();
         WriteSummary(workbook.Worksheets.Add("Resumo"), result);
         WriteInventory(workbook.Worksheets.Add("Inventário"), result);
+        if (result.AllModernizations.Any()) WriteModernization(workbook.Worksheets.Add("Modernização"), result);
+        if (result.Architecture != null) WriteArchitecture(workbook.Worksheets.Add("Arquitetura AWS"), result);
         workbook.SaveAs(path);
     }
 
@@ -40,7 +42,7 @@ public static class ExcelReport
         }
 
         row++;
-        string[] headers = ["Projeto", "Tipo", "Framework de origem", "Bloqueantes", "Atenção", "Automático", "Erros de build", "% automatizado"];
+        string[] headers = ["Projeto", "Tipo", "Framework de origem", "Bloqueantes", "Atenção", "Automático", "Erros de build", "% automatizado", "Modernização", "Hospedagem AWS"];
         for (var c = 0; c < headers.Length; c++) sheet.Cell(row, c + 1).Value = headers[c];
         var headerRow = row;
         foreach (var project in result.Projects)
@@ -55,6 +57,8 @@ public static class ExcelReport
             sheet.Cell(row, 7).Value = project.Build?.Errors.ToString() ?? "—";
             sheet.Cell(row, 8).Value = project.AutomationPercent / 100.0;
             sheet.Cell(row, 8).Style.NumberFormat.Format = "0%";
+            sheet.Cell(row, 9).Value = project.Modernizations.Count;
+            sheet.Cell(row, 10).Value = project.Hosting?.Primary.Short() ?? "—";
         }
         if (row > headerRow) sheet.Range(headerRow, 1, row, headers.Length).CreateTable("Projetos");
         sheet.Column(1).Width = 34;

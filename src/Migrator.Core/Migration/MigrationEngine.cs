@@ -1,6 +1,7 @@
 using System.Text;
 using System.Xml.Linq;
 using Migrator.Core.Analysis;
+using Migrator.Core.Cloud;
 using Migrator.Core.Data;
 using Migrator.Core.Models;
 using Migrator.Core.NuGet;
@@ -51,7 +52,7 @@ public sealed class MigrationEngine
 
         var map = projects.ToDictionary(p => p.ProjectPath, p => Path.GetRelativePath(workspace.RootDir, p.ProjectPath), StringComparer.OrdinalIgnoreCase);
         using var nuget = new NuGetClient(options.Offline);
-        var context = new ProjectMigrationContext(workspace.RootDir, map, new PackagePlanner(nuget), UsesSystemDataSqlClient(projects));
+        var context = new ProjectMigrationContext(workspace.RootDir, map, new PackagePlanner(nuget), UsesSystemDataSqlClient(projects), options.Cloud);
 
         var migrated = new List<MigratedProject>();
         foreach (var project in projects)
@@ -89,6 +90,12 @@ public sealed class MigrationEngine
         foreach (var project in migrated.Where(p => p.Spec != null))
             project.Plan.Write(project.Result.OutputProjectPath!, ProjectFileWriter.Write(project.Spec!));
 
+        if (options.Cloud == CloudTarget.Aws)
+        {
+            progress?.Report("Avaliando arquitetura alvo na AWS...");
+            AdviseCloud(result, migrated, ordered);
+        }
+
         if (!options.DryRun)
         {
             foreach (var project in migrated) await ApplyAsync(project.Plan, result.OutputDir!);
@@ -105,6 +112,45 @@ public sealed class MigrationEngine
         progress?.Report("Gerando relatórios...");
         await ReportWriter.WriteAllAsync(result, result.ReportDir);
         return result;
+    }
+
+    /// <summary>
+    /// Hosting recommendation per project (using the merged profile of the project plus everything it references),
+    /// Dockerfiles for deployable projects and the solution-wide architecture proposal.
+    /// </summary>
+    private static void AdviseCloud(SolutionResult result, List<MigratedProject> migrated, IReadOnlyList<MigratedProject> ordered)
+    {
+        var profiles = new List<(ProjectResult Result, ApplicationProfile Profile)>();
+        var byPath = migrated.ToDictionary(m => m.Result.Project.ProjectPath, StringComparer.OrdinalIgnoreCase);
+        var dockerIgnoreWritten = false;
+        foreach (var project in migrated)
+        {
+            var closure = PackageAligner.Closure(project, ordered).ToList();
+            var merged = project.Profile.MergeWith(closure.Select(c => c.Profile));
+            var hosting = AwsArchitect.Recommend(project.Result.Project, merged);
+            project.Result.Hosting = hosting;
+            profiles.Add((project.Result, merged));
+
+            if (hosting.Primary is AwsHosting.NotDeployable or AwsHosting.Desktop || project.Result.OutputProjectPath == null) continue;
+            var dependencies = closure.Where(c => c.Result.OutputProjectPath != null).Select(c => c.Result.OutputProjectPath!).ToList();
+            var dockerfile = AwsArchitect.Dockerfile(project.Result.Project, hosting, merged, project.Result.OutputProjectPath, dependencies);
+            project.Plan.Write(Path.Combine(project.Result.RelativeDir, "Dockerfile"), dockerfile);
+            if (!dockerIgnoreWritten)
+            {
+                project.Plan.Write(".dockerignore", AwsArchitect.DockerIgnore());
+                dockerIgnoreWritten = true;
+            }
+            hosting.DockerfileGenerated = true;
+            project.Result.Inventory.Add(new InventoryItem
+            {
+                Project = project.Result.Project.Name, Severity = InventorySeverity.Info, Category = InventoryCategory.ProjectFile, RuleId = "AWS-DOCKERFILE",
+                Title = $"Dockerfile gerado ({(hosting.RequiresWindows ? "imagem Windows" : "imagem Linux")}) para {hosting.Primary.Short()}",
+                Description = "Build multi-stage a partir da raiz da solução; porta 8080; usuário não-root; TZ/LANG definidos quando a aplicação depende de cultura/fuso.",
+                Suggestion = "Veja a seção 'Arquitetura alvo (AWS)' do relatório para os pré-requisitos antes do primeiro deploy.", AutoMigrated = true,
+                FilePath = "Dockerfile"
+            });
+        }
+        result.Architecture = AwsArchitect.Propose(result, profiles);
     }
 
     // Connection strings live in the host while SqlConnection is opened in libraries, so this is decided solution-wide.

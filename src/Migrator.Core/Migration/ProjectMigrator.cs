@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Migrator.Core.Analysis;
+using Migrator.Core.Cloud;
 using Migrator.Core.Data;
 using Migrator.Core.Models;
 
@@ -17,7 +18,7 @@ public sealed class OutputPlan
     private static string Normalize(string path) => path.Replace('/', Path.DirectorySeparatorChar).TrimStart(Path.DirectorySeparatorChar);
 }
 
-public sealed record ProjectMigrationContext(string RootDir, IReadOnlyDictionary<string, string> ProjectMap, PackagePlanner Planner, bool PreserveSqlEncryption);
+public sealed record ProjectMigrationContext(string RootDir, IReadOnlyDictionary<string, string> ProjectMap, PackagePlanner Planner, bool PreserveSqlEncryption, CloudTarget Cloud = CloudTarget.Aws);
 
 public static partial class ProjectMigrator
 {
@@ -90,7 +91,10 @@ public static partial class ProjectMigrator
             items.Add(Item(project, InventorySeverity.Info, InventoryCategory.ProjectFile, "PRJ-MODERN",
                 $"Projeto já é SDK-style moderno ({project.TargetFramework})", "Copiado sem alterações.",
                 "Se ainda não usa net10.0, atualize o TargetFramework e os pacotes Microsoft.* para a linha 10.0.", auto: true));
-            return new MigratedProject(result, null, plan);
+            var modernCode = project.SourceFiles.Where(f => File.Exists(f.FullPath)).Select(f => (Path.GetRelativePath(project.ProjectDir, f.FullPath).Replace('\\', '/'), TextFiles.Read(f.FullPath).Text)).ToList();
+            var modernProfile = ApplicationProfiler.Analyze(project, modernCode, LoadConfig(project));
+            result.Modernizations.AddRange(ModernizationAdvisor.Analyze(project, modernProfile, modernCode, ctx.Cloud));
+            return new MigratedProject(result, null, plan, modernProfile);
         }
 
         var isWeb = project.Kind == ProjectKind.Web;
@@ -99,6 +103,12 @@ public static partial class ProjectMigrator
             (e.Text, e.WasAnsi) = TextFiles.Read(e.Item.FullPath);
         MarkInstallerDesigners(entries);
         var codeEntries = entries.Where(e => e.Role == Role.Code).ToList();
+
+        // Architectural profile and modernization advice are computed on the ORIGINAL code (before rewrites),
+        // where legacy APIs (System.Messaging, SmtpClient, Session[...]) are still recognizable.
+        var originalCode = entries.Where(e => e.Role is Role.Code or Role.LegacyCode).Select(e => (e.Unix, e.Text!)).ToList();
+        var profile = ApplicationProfiler.Analyze(project, originalCode, LoadConfig(project));
+        result.Modernizations.AddRange(ModernizationAdvisor.Analyze(project, profile, originalCode, ctx.Cloud));
 
         var catalog = ControllerCatalog.Build(codeEntries.Select(e => e.Text!));
         var legacyCode = entries.Where(e => e.Role == Role.LegacyCode).ToList();
@@ -215,7 +225,8 @@ public static partial class ProjectMigrator
                 KeepNewtonsoft: catalog.Api.Count > 0,
                 HasSwagger: packages.References.Any(r => r.Id.Equals("Swashbuckle.AspNetCore", StringComparison.OrdinalIgnoreCase)),
                 UsesOutputCache: facts.UsesOutputCache,
-                Log4NetConfigFile: config.Log4NetExtracted);
+                Log4NetConfigFile: config.Log4NetExtracted,
+                CloudReady: ctx.Cloud != CloudTarget.None);
             var hasProgram = entries.Any(e => e.Unix.Equals("Program.cs", StringComparison.OrdinalIgnoreCase) && e.Role == Role.Code);
             var programPath = Path.Combine(result.RelativeDir, hasProgram ? "Program.Migrator.cs.txt" : "Program.cs");
             plan.Write(programPath, ProgramGenerator.GenerateWeb(programInput));
@@ -228,7 +239,14 @@ public static partial class ProjectMigrator
                 plan.Write(Path.Combine(result.RelativeDir, "Properties", "launchSettings.json"), ProgramGenerator.GenerateLaunchSettings(project));
         }
 
-        return new MigratedProject(result, spec, plan);
+        return new MigratedProject(result, spec, plan, profile);
+    }
+
+    private static XElement? LoadConfig(ProjectInfo project)
+    {
+        if (project.ConfigFilePath == null || !File.Exists(project.ConfigFilePath)) return null;
+        try { return XDocument.Load(project.ConfigFilePath).Root; }
+        catch (Exception ex) when (ex is System.Xml.XmlException or IOException) { return null; }
     }
 
     private static List<Entry> Classify(ProjectInfo project, ProjectMigrationContext ctx, List<InventoryItem> items)
@@ -640,10 +658,8 @@ public static partial class ProjectMigrator
 
         foreach (var entry in entries.Where(e => e.Linked))
         {
-            var include = entry.Destination != null
-                ? entry.Relative
-                : entry.Item.FullPath;
-            var link = entry.Item.Link ?? Path.GetFileName(entry.Item.FullPath);
+            var include = (entry.Destination != null ? entry.Relative : entry.Item.FullPath).Replace('/', '\\');
+            var link = (entry.Item.Link ?? Path.GetFileName(entry.Item.FullPath)).Replace('/', '\\');
             var type = entry.Role == Role.Code ? "Compile" : "None";
             spec.Items.Add(new XElement(type, new XAttribute("Include", include), new XAttribute("Link", link)));
             if (entry.Destination == null)

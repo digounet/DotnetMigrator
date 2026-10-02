@@ -47,21 +47,48 @@ public static class RunCommand
         table.AddColumn(new TableColumn("[yellow]Atenção[/]").RightAligned());
         table.AddColumn(new TableColumn("[green]Automático[/]").RightAligned());
         table.AddColumn("Build");
+        if (result.Architecture != null)
+        {
+            table.AddColumn(new TableColumn("[purple]Modern.[/]").RightAligned());
+            table.AddColumn("AWS");
+        }
 
         foreach (var p in result.Projects)
         {
             var build = ReportWriter.BuildLabel(result, p);
             var buildMarkup = p.Build == null ? $"[grey]{Markup.Escape(build)}[/]" : p.Build.Succeeded ? "[green]OK[/]" : $"[red]{Markup.Escape(build)}[/]";
-            table.AddRow(
+            var cells = new List<string>
+            {
                 Markup.Escape(p.Project.Name),
                 Markup.Escape(ReportWriter.KindLabel(p.Project.Kind)),
                 Markup.Escape(p.Project.TargetFramework),
                 p.Breaking.Count().ToString(),
                 p.Warnings.Count().ToString(),
                 p.Automatic.Count().ToString(),
-                buildMarkup);
+                buildMarkup
+            };
+            if (result.Architecture != null)
+            {
+                cells.Add(p.Modernizations.Count.ToString());
+                cells.Add(Markup.Escape(p.Hosting?.Primary.Short() ?? "—"));
+            }
+            table.AddRow(cells.ToArray());
         }
         AnsiConsole.Write(table);
+
+        if (result.Architecture is { } arch)
+        {
+            var required = arch.Components.Where(c => c.Required).Select(c => c.Service.Split(" (")[0].Split(" + ")[0]).ToList();
+            AnsiConsole.MarkupLine($"Arquitetura AWS: [cyan]{Markup.Escape(string.Join(", ", required))}[/]" +
+                (arch.Components.Count > required.Count ? $" [grey](+{arch.Components.Count - required.Count} recomendados)[/]" : ""));
+            var mods = result.AllModernizations.ToList();
+            if (mods.Count > 0)
+            {
+                var byKind = mods.GroupBy(m => m.Kind).OrderBy(g => g.Key).Select(g => $"{g.Count()} {g.Key.Display().ToLowerInvariant()}");
+                var high = mods.Count(m => m.Impact == Impact.High);
+                AnsiConsole.MarkupLine($"Modernização: [purple]{mods.Count} sugestões[/] ({Markup.Escape(string.Join(", ", byKind))}); [red]{high}[/] de impacto alto.");
+            }
+        }
 
         var global = result.GlobalItems.Where(i => i.RequiresAction).ToList();
         foreach (var item in global.Take(10))

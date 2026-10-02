@@ -9,6 +9,7 @@ public static class ReportWriter
     public const string MarkdownFile = "migration-report.md";
     public const string CsvFile = "inventory.csv";
     public const string ExcelFile = "inventory.xlsx";
+    public const string ModernizationCsvFile = "modernization.csv";
 
     public static async Task WriteAllAsync(SolutionResult result, string directory)
     {
@@ -17,6 +18,8 @@ public static class ReportWriter
         await File.WriteAllTextAsync(Path.Combine(directory, HtmlFile), HtmlReport.Render(result), utf8Bom);
         await File.WriteAllTextAsync(Path.Combine(directory, MarkdownFile), MarkdownReport.Render(result), utf8Bom);
         await File.WriteAllTextAsync(Path.Combine(directory, CsvFile), CsvReport.Render(result), utf8Bom);
+        if (result.AllModernizations.Any())
+            await File.WriteAllTextAsync(Path.Combine(directory, ModernizationCsvFile), CsvReport.RenderModernization(result), utf8Bom);
         ExcelReport.Write(result, Path.Combine(directory, ExcelFile));
     }
 
@@ -27,6 +30,12 @@ public static class ReportWriter
              .ThenBy(i => i.RuleId, StringComparer.Ordinal)
              .ThenBy(i => i.FilePath, StringComparer.OrdinalIgnoreCase)
              .ThenBy(i => i.Line);
+
+    internal static IEnumerable<ModernizationItem> OrderedModernizations(IEnumerable<ModernizationItem> items) =>
+        items.OrderBy(i => i.Impact)
+             .ThenBy(i => i.Kind switch { ModernizationKind.Cloud => 0, ModernizationKind.License => 1, ModernizationKind.Security => 2, ModernizationKind.Deprecated => 3, _ => 4 })
+             .ThenBy(i => i.Effort)
+             .ThenBy(i => i.RuleId, StringComparer.Ordinal);
 
     internal static string Location(InventoryItem item) =>
         item.FilePath == null ? "" : item.Line is { } line ? $"{item.FilePath}:{line}" : item.FilePath;

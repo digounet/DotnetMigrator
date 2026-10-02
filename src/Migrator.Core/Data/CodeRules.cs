@@ -237,6 +237,18 @@ public static class CodeRules
             "Windows Service (ServiceBase)",
             "O serviço continua funcionando no .NET 10 com o pacote System.ServiceProcess.ServiceController.",
             "Recomendado: migrar para Worker Service (BackgroundService + Host.CreateApplicationBuilder + builder.Services.AddWindowsService()), que traz DI, configuração e logging nativos."),
+        new("NET023", @"\bCallContext\.(Logical)?(Set|Get|Free)\w*Data\(|\bSystem\.Runtime\.Remoting\.Messaging\b", InventorySeverity.Breaking,
+            "CallContext (contexto lógico de chamada)",
+            "CallContext não existe no .NET 10.",
+            "Use AsyncLocal<T> (fluxo assíncrono) ou passe o contexto explicitamente; em ASP.NET Core, HttpContext.Items / IHttpContextAccessor."),
+        new("NET024", @"\bSystem\.Web\.Hosting\.HostingEnvironment\.(ApplicationPhysicalPath|SiteName|IsHosted|RegisterObject)\b|\bHostingEnvironment\.(ApplicationPhysicalPath|SiteName|IsHosted|RegisterObject)\b", InventorySeverity.Breaking,
+            "HostingEnvironment do System.Web",
+            "System.Web.Hosting não existe no .NET 10.",
+            "Injete IWebHostEnvironment (ContentRootPath/ApplicationName) e IHostApplicationLifetime para eventos de desligamento."),
+        new("NET025", @"\bHttpUtility\.(ParseQueryString)\(|\bHttpServerUtility\b|\bServer\.(UrlEncode|UrlDecode|HtmlEncode|HtmlDecode|Transfer|Execute|GetLastError)\(", InventorySeverity.Warning,
+            "Utilitários de HttpServerUtility",
+            "Server.* não existe no ASP.NET Core (HttpUtility continua disponível em System.Web.HttpUtility).",
+            "UrlEncode/HtmlEncode → System.Net.WebUtility ou Uri.EscapeDataString; Server.Transfer → redirecionamento ou re-execução de pipeline (app.UseStatusCodePagesWithReExecute); GetLastError → IExceptionHandlerFeature."),
     ];
 
     public static readonly IReadOnlyList<CodeRule> Razor =
