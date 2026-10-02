@@ -27,7 +27,7 @@ public static partial class MarkdownReport
         sb.AppendLine("| Projeto | Tipo | Origem | Bloqueantes | Atenção | Automático | % automatizado | Build |" + (aws ? " Modernização | AWS |" : ""));
         sb.AppendLine("|---|---|---|---:|---:|---:|---:|---|" + (aws ? "---:|---|" : ""));
         foreach (var p in result.Projects)
-            sb.AppendLine($"| {Cell(p.Project.Name)} | {ReportWriter.KindLabel(p.Project.Kind)} | {Cell(p.Project.TargetFramework)} | {p.Breaking.Count()} | {p.Warnings.Count()} | {p.Automatic.Count()} | {p.AutomationPercent}% | {ReportWriter.BuildLabel(result, p)} |" +
+            sb.AppendLine($"| {Cell(p.Project.Name)} | {ReportWriter.KindLabel(p.Project)} | {Cell(p.Project.TargetFramework)} | {p.Breaking.Count()} | {p.Warnings.Count()} | {p.Automatic.Count()} | {p.AutomationPercent}% | {ReportWriter.BuildLabel(result, p)} |" +
                 (aws ? $" {p.Modernizations.Count} | {Cell(p.Hosting?.Primary.Short() ?? "—")} |" : ""));
         sb.AppendLine();
 
@@ -45,7 +45,7 @@ public static partial class MarkdownReport
         {
             sb.AppendLine($"## {p.Project.Name}");
             sb.AppendLine();
-            sb.AppendLine($"{ReportWriter.KindLabel(p.Project.Kind)} · {p.Project.TargetFramework} → net10.0 · pasta `{(p.RelativeDir.Length == 0 ? "." : p.RelativeDir)}`");
+            sb.AppendLine($"{ReportWriter.KindLabel(p.Project)} · {p.Project.TargetFramework} → net10.0 · pasta `{(p.RelativeDir.Length == 0 ? "." : p.RelativeDir)}`");
             sb.AppendLine();
             RenderItems(sb, p.Inventory);
         }

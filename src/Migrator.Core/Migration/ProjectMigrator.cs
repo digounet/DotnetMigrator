@@ -82,6 +82,9 @@ public static partial class ProjectMigrator
         var csprojName = Path.GetFileName(project.ProjectPath);
         result.OutputProjectPath = Path.Combine(result.RelativeDir, csprojName);
 
+        if (project.IsVisualBasic && !project.IsAlreadyModern)
+            return AnalyzeVisualBasic(project, ctx, result, plan);
+
         if (project.IsAlreadyModern)
         {
             plan.Copy(project.ProjectPath, result.OutputProjectPath);
@@ -103,6 +106,7 @@ public static partial class ProjectMigrator
             (e.Text, e.WasAnsi) = TextFiles.Read(e.Item.FullPath);
         MarkInstallerDesigners(entries);
         var codeEntries = entries.Where(e => e.Role == Role.Code).ToList();
+        if (isWeb) ReportWebForms(project, entries.Where(e => e.Role == Role.LegacyMarkup).Select(e => e.Relative), entries.Where(e => e.Role == Role.LegacyCode).Select(e => (e.Relative, e.Text ?? "")), items);
 
         // Architectural profile and modernization advice are computed on the ORIGINAL code (before rewrites),
         // where legacy APIs (System.Messaging, SmtpClient, Session[...]) are still recognizable.
@@ -284,6 +288,49 @@ public static partial class ProjectMigrator
         }
 
         return new MigratedProject(result, spec, plan, profile);
+    }
+
+    /// <summary>
+    /// VB.NET: no conversion (the rewriters are C#-only), but the project is profiled with the same signals so the
+    /// inventory, the modernization advice and the AWS architecture cover it; the report says explicitly what to do.
+    /// </summary>
+    private static MigratedProject AnalyzeVisualBasic(ProjectInfo project, ProjectMigrationContext ctx, ProjectResult result, OutputPlan plan)
+    {
+        var items = result.Inventory;
+        result.OutputProjectPath = null;
+        var sources = project.SourceFiles.Where(f => File.Exists(f.FullPath))
+            .Select(f => (Path.GetRelativePath(project.ProjectDir, f.FullPath).Replace('\\', '/'), TextFiles.Read(f.FullPath).Text)).ToList();
+        var profile = ApplicationProfiler.Analyze(project, sources, LoadConfig(project));
+        result.Modernizations.AddRange(ModernizationAdvisor.Analyze(project, profile, [], ctx.Cloud));
+
+        var lines = sources.Sum(s => s.Item2.Count(c => c == '\n') + 1);
+        var markup = project.Items.Select(i => Path.GetRelativePath(project.ProjectDir, i.FullPath)).Where(r => WebFormsMarkup.Contains(Path.GetExtension(r))).ToList();
+        if (project.Kind == ProjectKind.Web)
+            ReportWebForms(project, markup, sources.Where(s => s.Item1.EndsWith(".aspx.vb", StringComparison.OrdinalIgnoreCase) || s.Item1.EndsWith(".ascx.vb", StringComparison.OrdinalIgnoreCase) || s.Item1.EndsWith(".master.vb", StringComparison.OrdinalIgnoreCase)), items);
+
+        items.Add(Item(project, InventorySeverity.Breaking, InventoryCategory.ProjectFile, "PRJ-VB",
+            $"Projeto VB.NET não convertido ({sources.Count} arquivo(s) .vb, {lines:N0} linhas)",
+            "O Migrator converte C#. Este projeto foi analisado (pacotes, sinais de arquitetura, hospedagem na AWS) mas nenhuma cópia migrada foi gerada; ele não está no .slnx de saída.",
+            "Opções: (1) .NET Upgrade Assistant converte o .vbproj para SDK-style/net10.0 mantendo VB (sem suporte a Web Forms/WCF host); (2) converter para C# com o ICSharpCode CodeConverter e rodar o Migrator novamente para ter a migração completa; (3) se for Web Forms, reescrever (Razor Pages/Blazor)."));
+        return new MigratedProject(result, null, plan, profile);
+    }
+
+    /// <summary>Web Forms cannot be converted; size the rewrite so the effort is visible in the inventory.</summary>
+    private static void ReportWebForms(ProjectInfo project, IEnumerable<string> markupFiles, IEnumerable<(string Relative, string Text)> codeBehind, List<InventoryItem> items)
+    {
+        var markup = markupFiles.Select(r => Path.GetExtension(r).ToLowerInvariant()).ToList();
+        int pages = markup.Count(e => e == ".aspx"), controls = markup.Count(e => e == ".ascx"), masters = markup.Count(e => e == ".master"), handlers = markup.Count(e => e is ".ashx" or ".asmx");
+        if (pages + controls + masters == 0) return;
+        var codeLines = codeBehind.Where(c => !c.Relative.Contains(".designer.", StringComparison.OrdinalIgnoreCase)
+                                             && (c.Relative.EndsWith(".aspx.cs", StringComparison.OrdinalIgnoreCase) || c.Relative.EndsWith(".ascx.cs", StringComparison.OrdinalIgnoreCase) || c.Relative.EndsWith(".master.cs", StringComparison.OrdinalIgnoreCase)
+                                                 || c.Relative.EndsWith(".aspx.vb", StringComparison.OrdinalIgnoreCase) || c.Relative.EndsWith(".ascx.vb", StringComparison.OrdinalIgnoreCase) || c.Relative.EndsWith(".master.vb", StringComparison.OrdinalIgnoreCase)))
+            .Sum(c => c.Text.Count(ch => ch == '\n') + 1);
+        var lowDays = pages * 1 + controls * 0.5 + masters * 1;
+        var highDays = pages * 3 + controls * 1 + masters * 2;
+        items.Add(Item(project, InventorySeverity.Breaking, InventoryCategory.View, "WEB-WEBFORMS",
+            $"Web Forms: {pages} página(s) .aspx, {controls} controle(s) .ascx, {masters} master page(s){(handlers > 0 ? $", {handlers} handler(s)/ASMX" : "")}; {codeLines:N0} linhas de code-behind",
+            "Web Forms não existe no .NET 10. Os arquivos foram movidos para _Legacy/ e não compilam; as páginas precisam ser reescritas.",
+            $"Reescreva em Razor Pages (páginas com code-behind, migração mais direta) ou Blazor (componentes). Estimativa de referência: {lowDays:0.#} a {highDays:0.#} dias de desenvolvimento (1-3 dias por página, 0,5-1 por controle, 1-2 por master, conforme a lógica no code-behind). Até lá a aplicação só roda em IIS/Windows (EC2) ou permanece on-premises."));
     }
 
     /// <summary>Moves the service designer and the ServiceBase.Run Program.cs to _Legacy and writes the generic-host Program.cs.</summary>

@@ -40,6 +40,8 @@ public static class ReportWriter
     internal static string Location(InventoryItem item) =>
         item.FilePath == null ? "" : item.Line is { } line ? $"{item.FilePath}:{line}" : item.FilePath;
 
+    public static string KindLabel(ProjectInfo project) => KindLabel(project.Kind) + (project.IsVisualBasic ? " · VB.NET" : "");
+
     public static string KindLabel(ProjectKind kind) => kind switch
     {
         ProjectKind.Web => "Web (MVC/Web API)",
@@ -50,11 +52,17 @@ public static class ReportWriter
         _ => "Biblioteca"
     };
 
-    public static string BuildLabel(SolutionResult result, ProjectResult project) =>
-        project.Build is null
-            ? (result.Options.DryRun ? "não executado (análise)" : result.Options.VerifyBuild ? "—" : "não executado")
-            : project.Build.BlockedBy != null ? $"bloqueado ({project.Build.BlockedBy} com erros)"
-            : project.Build.Errors == 0 ? "OK" : $"{project.Build.Errors} erro(s)";
+    public static string BuildLabel(SolutionResult result, ProjectResult project)
+    {
+        if (project.Build is null) return result.Options.DryRun ? "não executado (análise)" : result.Options.VerifyBuild ? "—" : "não executado";
+        if (project.Build.BlockedBy != null) return $"bloqueado ({project.Build.BlockedBy} com erros)";
+        if (project.Build.Errors > 0) return $"{project.Build.Errors} erro(s)";
+        var extras = new List<string>();
+        if (project.Tests != null) extras.Add(project.Tests.Succeeded ? $"testes {project.Tests.Passed}/{project.Tests.Total}" : project.Tests.Total == 0 ? "testes: nenhum executado" : $"testes {project.Tests.Failed} falha(s)");
+        if (project.Smoke != null) extras.Add(project.Smoke.Succeeded ? "/health OK" : "/health falhou");
+        if (project.DockerBuildSucceeded is { } docker) extras.Add(docker ? "docker OK" : "docker falhou");
+        return extras.Count == 0 ? "OK" : "OK · " + string.Join(" · ", extras);
+    }
 
     public static string ModeLabel(SolutionResult result) =>
         result.Options.DryRun ? "Análise (nenhum arquivo alterado)" : "Migração";

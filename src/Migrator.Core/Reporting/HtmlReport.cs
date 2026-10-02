@@ -134,8 +134,9 @@ public static partial class HtmlReport
         foreach (var p in result.Projects)
         {
             var build = ReportWriter.BuildLabel(result, p);
-            var buildClass = p.Build == null ? "" : p.Build.Succeeded ? "ok" : "fail";
-            sb.Append($"<tr><td><a href=\"#p-{Anchor(p.Project.Name)}\">{E(p.Project.Name)}</a></td><td>{E(ReportWriter.KindLabel(p.Project.Kind))}</td><td>{E(p.Project.TargetFramework)}</td>")
+            var runtimeOk = p.Tests is not { Succeeded: false } && p.Smoke is not { Succeeded: false } && p.DockerBuildSucceeded != false;
+            var buildClass = p.Build == null ? "" : p.Build.Succeeded && runtimeOk ? "ok" : "fail";
+            sb.Append($"<tr><td><a href=\"#p-{Anchor(p.Project.Name)}\">{E(p.Project.Name)}</a></td><td>{E(ReportWriter.KindLabel(p.Project))}</td><td>{E(p.Project.TargetFramework)}</td>")
               .Append($"<td class=\"num\">{p.Breaking.Count()}</td><td class=\"num\">{p.Warnings.Count()}</td><td class=\"num\">{p.Automatic.Count()}</td>")
               .Append($"<td class=\"num\">{p.AutomationPercent}%</td><td class=\"{buildClass}\">{E(build)}</td>")
               .Append(result.Architecture != null ? $"<td>{E(p.Hosting?.Primary.Short() ?? "—")}</td>" : "")
@@ -163,7 +164,7 @@ public static partial class HtmlReport
         foreach (var p in result.Projects)
         {
             sb.Append($"<details class=\"project\" id=\"p-{Anchor(p.Project.Name)}\" {(p.Breaking.Any() ? "open" : "")}><summary>{E(p.Project.Name)}")
-              .Append($"<span class=\"sub\">{E(ReportWriter.KindLabel(p.Project.Kind))} · {E(p.Project.TargetFramework)} → net10.0 · {E(p.RelativeDir.Length == 0 ? "." : p.RelativeDir)}</span>")
+              .Append($"<span class=\"sub\">{E(ReportWriter.KindLabel(p.Project))} · {E(p.Project.TargetFramework)} → net10.0 · {E(p.RelativeDir.Length == 0 ? "." : p.RelativeDir)}</span>")
               .Append($"<span class=\"badge breaking\">{p.Breaking.Count()} bloqueantes</span><span class=\"badge warning\">{p.Warnings.Count()} atenção</span><span class=\"badge auto\">{p.Automatic.Count()} automáticos</span></summary>");
             RenderItems(sb, p.Inventory);
             sb.Append("</details>");

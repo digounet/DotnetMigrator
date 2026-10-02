@@ -22,7 +22,7 @@ public enum Signal
     // Identity
     FormsAuth, WindowsAuth, ActiveDirectory, Membership, Identity2, OwinOAuth, Jwt, Saml,
     // Integration
-    SignalR, WcfHost, WcfClient, Asmx, Remoting, ExternalHttp, HardcodedUrls,
+    SignalR, WcfHost, WcfClient, Asmx, Remoting, ExternalHttp, HardcodedUrls, WebForms,
     // Windows-only
     SystemDrawing, EventLog, PerformanceCounter, Registry, Com, ComPlus, PInvoke, OfficeInterop, CrystalReports, ReportViewer, Wmi, IisAdministration, WinForms, Wpf,
     // Observability / config
@@ -150,7 +150,7 @@ public static partial class ApplicationProfiler
         new(Signal.SpreadsheetFiles, Rx(@"\bOfficeOpenXml\b|\bExcelPackage\b|\bClosedXML\b|\bXLWorkbook\b|\bNPOI\b|\bExcelDataReader\b|\bCsvHelper\b|\bCsvReader\b|\.xlsx?""")),
         new(Signal.OfficeOleDb, Rx(@"Microsoft\.(ACE|Jet)\.OLEDB"), DetailGroup: 0),
 
-        new(Signal.InProcSession, Rx(@"\bSession\[|\bHttpSessionState(Base)?\b|\bSession\.(Add|Remove|Clear|Abandon|SetString|GetString)\(")),
+        new(Signal.InProcSession, Rx(@"\bSession\[|\bSession\s*\(\s*""|\bHttpSessionState(Base)?\b|\bSession\.(Add|Remove|Clear|Abandon|SetString|GetString)\(")),
         new(Signal.LocalCache, Rx(@"\bHttpRuntime\.Cache\b|\bHttpContext\.Cache\b|\bMemoryCache\.Default\b|\bObjectCache\b|\bIMemoryCache\b|\bSystem\.Runtime\.Caching\b|\bnew\s+MemoryCache\(")),
         new(Signal.StaticState, Rx(@"\b(private|public|internal|protected)\s+static\s+(readonly\s+)?(System\.Collections\.(Generic|Concurrent)\.)?(Dictionary|ConcurrentDictionary|List|HashSet|Queue|ConcurrentQueue|ConcurrentBag)<")),
         new(Signal.Redis, Rx(@"\bStackExchange\.Redis\b|\bConnectionMultiplexer\b|\bServiceStack\.Redis\b")),
@@ -267,7 +267,7 @@ public static partial class ApplicationProfiler
 
         var texts = code.ToList();
         foreach (var (path, text) in texts)
-            ScanCode(profile, project.Kind, path, text);
+            ScanCode(profile, project.Kind, path, text, project.IsVisualBasic);
 
         foreach (var package in project.Packages)
             foreach (var (prefix, signal) in PackageProbes)
@@ -293,7 +293,17 @@ public static partial class ApplicationProfiler
     private static bool UsesNamespace(string text, string ns) =>
         text.Contains("using " + ns + ";", StringComparison.Ordinal) || text.Contains(ns + ".", StringComparison.Ordinal);
 
-    private static void ScanCode(ApplicationProfile profile, ProjectKind kind, string path, string text)
+    /// <summary>VB.NET is case-insensitive (New SqlConnection, new sqlconnection...): the same probes, ignoring case.</summary>
+    private static readonly Lazy<CodeProbe[]> CodeProbesVb = new(() =>
+        CodeProbes.Select(p => p with
+        {
+            // VB strings have no escape sequences: a UNC path is written "\\servidor\pasta" literally.
+            Regex = p.Signal == Signal.UncPaths
+                ? new Regex(@"""\\\\(?<host>[\w\-.$]+)\\", RegexOptions.Compiled | RegexOptions.Multiline | RegexOptions.IgnoreCase)
+                : new Regex(p.Regex.ToString(), p.Regex.Options | RegexOptions.IgnoreCase)
+        }).ToArray());
+
+    private static void ScanCode(ApplicationProfile profile, ProjectKind kind, string path, string text, bool visualBasic = false)
     {
         var isController = ControllerFile().IsMatch(text);
         if (isController)
@@ -303,14 +313,14 @@ public static partial class ApplicationProfiler
         }
 
         LineIndex? lines = null;
-        foreach (var probe in CodeProbes)
+        foreach (var probe in visualBasic ? CodeProbesVb.Value : CodeProbes)
         {
             if (probe.OnlyKinds != null && !probe.OnlyKinds.Contains(kind)) continue;
             foreach (Match match in probe.Regex.Matches(text))
             {
                 lines ??= new LineIndex(text);
                 var (line, content) = lines.Locate(match.Index);
-                if (IsComment(content)) continue;
+                if (IsComment(content, visualBasic)) continue;
                 var detail = probe.DetailGroup > 0 ? match.Groups[probe.DetailGroup].Value.Replace(@"\\", @"\") : null;
                 profile.Add(probe.Signal, $"{path}:{line}", detail);
             }
@@ -325,6 +335,9 @@ public static partial class ApplicationProfiler
             var relative = item.IsInside(project.ProjectDir) ? Path.GetRelativePath(project.ProjectDir, item.FullPath).Replace('\\', '/') : null;
             switch (ext)
             {
+                case ".aspx": profile.Add(Signal.WebForms, relative, "página .aspx"); break;
+                case ".ascx": profile.Add(Signal.WebForms, relative, "controle .ascx"); break;
+                case ".master": profile.Add(Signal.WebForms, relative, "master page"); break;
                 case ".svc": profile.Add(Signal.WcfHost, relative, "arquivo .svc"); break;
                 case ".asmx": profile.Add(Signal.Asmx, relative, "arquivo .asmx"); break;
                 case ".edmx": profile.Add(Signal.Edmx, relative, "modelo EDMX"); break;
@@ -501,9 +514,10 @@ public static partial class ApplicationProfiler
         _ => Signal.SqlServer
     };
 
-    private static bool IsComment(string line)
+    private static bool IsComment(string line, bool visualBasic = false)
     {
         var trimmed = line.TrimStart();
+        if (visualBasic) return trimmed.StartsWith('\'') || trimmed.StartsWith("REM ", StringComparison.OrdinalIgnoreCase);
         return trimmed.StartsWith("//", StringComparison.Ordinal) || trimmed.StartsWith("*", StringComparison.Ordinal) || trimmed.StartsWith("///", StringComparison.Ordinal);
     }
 

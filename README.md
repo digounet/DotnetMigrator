@@ -6,7 +6,7 @@ Ferramenta de linha de comando que lê uma aplicação .NET Framework inteira (s
 
 Além da migração, a ferramenta **entende a aplicação** e entrega duas camadas de recomendação: **modernização** (bibliotecas que passaram a ser pagas ou foram descontinuadas, código C# que compila mas muda de comportamento no .NET 10/Linux, idiomas antigos) e **arquitetura alvo na AWS** (qual serviço hospeda cada projeto — ECS Fargate, tarefa agendada, Lambda, containers Windows — e quais serviços gerenciados substituem banco, filas, arquivos, e-mail, sessão, segredos e agendamento), com Dockerfiles gerados, diagrama e plano de migração. Foi pensada para programas de migração em lote: dezenas de aplicações, mesmo pipeline, mesma arquitetura de referência.
 
-Tipos de projeto suportados: ASP.NET MVC 5, ASP.NET Web API 2, console, Windows Service, bibliotecas e testes (MSTest/NUnit/xUnit). Projetos WinForms/WPF recebem apenas a conversão do `.csproj` (`net10.0-windows`). Projetos VB.NET, Web Site (sem `.csproj`) e de banco de dados aparecem no inventário como não migrados.
+Tipos de projeto suportados: ASP.NET MVC 5, ASP.NET Web API 2, console, Windows Service (convertido em Worker Service), bibliotecas e testes (MSTest/NUnit/xUnit). Projetos WinForms/WPF recebem apenas a conversão do `.csproj` (`net10.0-windows`). **Projetos VB.NET** são carregados, perfilados (pacotes, sinais de arquitetura, hospedagem na AWS) e aparecem no inventário com o item `PRJ-VB` explicando as opções (Upgrade Assistant mantendo VB, ou conversão para C# e nova rodada do Migrator), mas não são convertidos. **Páginas Web Forms** (`.aspx/.ascx/.master`) vão para `_Legacy/` e geram o item `WEB-WEBFORMS` com a contagem e uma estimativa de reescrita; uma aplicação só de Web Forms é recomendada para IIS em EC2 Windows até ser reescrita. Web Site (sem `.csproj`) e projetos de banco de dados aparecem como não migrados.
 
 - [Resumo](#resumo)
 - [Início rápido](#início-rápido)
@@ -291,6 +291,16 @@ Depois de planejar todos os projetos, a ferramenta percorre a solução em ordem
 
 > O compilador C# só aponta erros dentro dos métodos depois que os erros de declaração (tipos, atributos, assinaturas) são resolvidos. O build mostra a primeira camada; as regras de detecção da etapa 5 já antecipam as seguintes.
 
+### 11b. Verificação de runtime (somente `migrate`)
+
+Compilar não é funcionar. Depois do build de verificação, para os projetos que compilaram:
+
+- **Projetos de teste** são executados com `dotnet test` (`TEST-RUN` / `TEST-FAILED`, com os nomes dos testes que falharam). Testes que passavam no .NET Framework e falham no .NET 10 costumam revelar mudanças de comportamento (cultura, fuso, caminhos, serialização).
+- **Aplicações web** são iniciadas em uma porta aleatória e recebem um `GET /health` (`SMOKE-OK` / `SMOKE-FAILED` com a saída do processo). Falhas aqui são quase sempre registros de DI faltando ou configuração ausente, e aparecem antes do primeiro deploy.
+- Com `--verify-docker`, as imagens dos Dockerfiles gerados são construídas no Docker local (`DOCKER-OK` / `DOCKER-FAILED`).
+
+`--no-tests` e `--no-smoke` desligam as duas primeiras etapas. O resultado aparece na coluna Build dos relatórios ("OK · testes 12/12 · /health OK").
+
 ### 12. Relatórios
 
 | Arquivo | Uso |
@@ -301,6 +311,7 @@ Depois de planejar todos os projetos, a ferramenta percorre a solução em ordem
 | `inventory.csv` | integração com outras ferramentas (UTF-8 com BOM) |
 | `modernization.csv` | sugestões de modernização e arquitetura (tipo, impacto, esforço, evidência, serviço AWS) |
 | `build-verification.log` | saída completa do build |
+| `_secrets/<projeto>/` (na saída, fora do git/Docker) | credenciais retiradas do appsettings: `appsettings.Secrets.json`, template, scripts do Secrets Manager, bloco da task definition, user-secrets |
 
 ---
 
@@ -630,6 +641,7 @@ dotnet run --project src/Migrator.Cli -- migrate samples\LegacyShop\LegacyShop.s
 ```
 migrator analyze <entrada> [--report <pasta>] [--offline] [--cloud aws|none] [--llm none|ollama] [--llm-model <m>] [--llm-endpoint <url>] [--llm-timeout <min>] [--llm-no-cache]
 migrator migrate <entrada> [--output <pasta>] [--report <pasta>] [--offline] [--cloud aws|none] [--force] [--no-build] [--build-timeout <min>]
+                 [--no-tests] [--no-smoke] [--verify-docker] [--keep-secrets]
                  [--llm none|ollama] [--llm-model <m>] [--llm-endpoint <url>] [--llm-rounds <n>] [--llm-timeout <min>] [--llm-no-cache]
 ```
 
@@ -648,6 +660,9 @@ migrator migrate <entrada> [--output <pasta>] [--report <pasta>] [--offline] [--
 | `--force` | migrate | Substitui uma saída anterior do Migrator |
 | `--no-build` | migrate | Pula o build de verificação |
 | `--build-timeout` | migrate | Tempo máximo do build de verificação em minutos (padrão 30) |
+| `--no-tests`, `--no-smoke` | migrate | Não executa os testes migrados / não sobe as apps web para testar `/health` |
+| `--verify-docker` | migrate | Constrói as imagens dos Dockerfiles gerados com o Docker local |
+| `--keep-secrets` | migrate | Mantém credenciais no appsettings gerado em vez de movê-las para `_secrets/` |
 
 Atrás de proxy corporativo, defina `HTTPS_PROXY` antes de executar. Se o nuget.org estiver inacessível, a ferramenta continua e avisa no relatório.
 

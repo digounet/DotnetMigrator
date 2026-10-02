@@ -401,6 +401,41 @@ public class ModernizationAndCloudTests
     }
 
     [Fact]
+    public void Visual_basic_sources_are_profiled_case_insensitively_and_web_forms_are_counted()
+    {
+        const string vb = """
+            Imports System.Data.SqlClient
+            ' Dim comentado As New MessageQueue(".\private$\x")  <- comentário VB não conta
+            Public Class Gerador
+                Public Sub Gerar()
+                    Using conexao As New sqlconnection("Server=s;Password=p")
+                        Dim pasta = "\\arquivos\relatorios"
+                        Session("Carrinho") = 1
+                        Dim excel As New Microsoft.Office.Interop.Excel.Application()
+                    End Using
+                End Sub
+            End Class
+            """;
+        var project = Project("Relatorios", ProjectKind.Web);
+        project.Language = "VB";
+        project.Items.Add(new ProjectItem { ItemType = "Content", FullPath = Path.Combine(project.ProjectDir, "Vendas.aspx") });
+        project.Items.Add(new ProjectItem { ItemType = "Content", FullPath = Path.Combine(project.ProjectDir, "Site.master") });
+        var profile = ApplicationProfiler.Analyze(project, [("Gerador.vb", vb)], null);
+
+        Assert.True(profile.Has(Signal.SqlServer));          // lowercase `sqlconnection` matched
+        Assert.True(profile.Has(Signal.UncPaths));
+        Assert.True(profile.Has(Signal.InProcSession));      // Session("...") VB syntax
+        Assert.True(profile.Has(Signal.OfficeInterop));
+        Assert.False(profile.Has(Signal.Msmq));              // VB comment skipped
+        Assert.Equal(2, profile.Count(Signal.WebForms));
+
+        var rec = AwsArchitect.Recommend(project, profile);
+        Assert.Equal(AwsHosting.Ec2Windows, rec.Primary);    // pure Web Forms app: IIS until rewritten
+        Assert.Contains(rec.Prerequisites, p => p.Contains("VB.NET"));
+        Assert.Contains(rec.Alternatives, a => a.Contains("Razor Pages"));
+    }
+
+    [Fact]
     public void Binding_redirect_public_key_tokens_are_not_secrets()
     {
         const string config = """

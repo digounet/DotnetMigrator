@@ -31,7 +31,7 @@ public static class ProjectLoader
         var dir = Path.GetDirectoryName(projectPath)!;
         var name = Path.GetFileNameWithoutExtension(projectPath);
 
-        var info = new ProjectInfo { ProjectPath = projectPath, Name = name };
+        var info = new ProjectInfo { ProjectPath = projectPath, Name = name, Language = projectPath.EndsWith(".vbproj", StringComparison.OrdinalIgnoreCase) ? "VB" : "C#" };
         info.IsSdkStyle = root.Attribute("Sdk") != null ||
                           root.Elements().Any(e => e.Name.LocalName == "Sdk") ||
                           root.Elements().Any(e => e.Name.LocalName == "Import" && e.Attribute("Sdk") != null);
@@ -234,7 +234,7 @@ public static class ProjectLoader
         {
             if (info.Items.Any(i => i.FullPath.Equals(file, StringComparison.OrdinalIgnoreCase))) continue;
             var ext = Path.GetExtension(file).ToLowerInvariant();
-            var type = ext switch { ".cs" => "Compile", ".resx" => "EmbeddedResource", _ => "None" };
+            var type = ext == info.SourceExtension ? "Compile" : ext == ".resx" ? "EmbeddedResource" : "None";
             info.Items.Add(new ProjectItem { ItemType = type, FullPath = file });
         }
     }
@@ -284,7 +284,7 @@ public static class ProjectLoader
             info.Kind = ProjectKind.Web;
         else if (info.UsesWinForms || info.UsesWpf)
             info.Kind = ProjectKind.Desktop;
-        else if (info.IsExecutable && Has("system.serviceprocess") && info.SourceFiles.Any(f => SafeRead(f.FullPath).Contains(": ServiceBase")))
+        else if (info.IsExecutable && Has("system.serviceprocess") && info.SourceFiles.Any(f => SafeRead(f.FullPath) is var src && (src.Contains(": ServiceBase") || src.Contains("Inherits ServiceBase", StringComparison.OrdinalIgnoreCase))))
             info.Kind = ProjectKind.WindowsService;
         else if (info.IsExecutable)
             info.Kind = ProjectKind.Console;

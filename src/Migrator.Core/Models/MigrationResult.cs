@@ -1,3 +1,5 @@
+using Migrator.Core.Migration;
+
 namespace Migrator.Core.Models;
 
 public sealed record MigrationOptions
@@ -14,6 +16,12 @@ public sealed record MigrationOptions
     public CloudTarget Cloud { get; init; } = CloudTarget.Aws;
     /// <summary>Keep credentials inside the generated appsettings*.json instead of moving them to _secrets/ (not recommended).</summary>
     public bool KeepSecrets { get; init; }
+    /// <summary>Run the migrated test projects (dotnet test) after a successful verification build.</summary>
+    public bool RunTests { get; init; } = true;
+    /// <summary>Start migrated web apps and request /health after a successful verification build.</summary>
+    public bool SmokeTest { get; init; } = true;
+    /// <summary>Build the generated Dockerfiles with the local Docker (slow; off by default).</summary>
+    public bool VerifyDocker { get; init; }
     /// <summary>Optional LLM assistance (build-fix loop, conversion drafts, executive narrative). Disabled by default.</summary>
     public Llm.LlmOptions Llm { get; init; } = new();
 }
@@ -27,6 +35,9 @@ public sealed class ProjectResult
     public List<ModernizationItem> Modernizations { get; } = [];
     public HostingRecommendation? Hosting { get; set; }
     public ProjectBuildStatus? Build { get; set; }
+    public TestRunStatus? Tests { get; set; }
+    public SmokeTestStatus? Smoke { get; set; }
+    public bool? DockerBuildSucceeded { get; set; }
 
     public IEnumerable<InventoryItem> Breaking => Inventory.Where(i => i.RequiresAction && i.Severity == InventorySeverity.Breaking);
     public IEnumerable<InventoryItem> Warnings => Inventory.Where(i => i.RequiresAction && i.Severity == InventorySeverity.Warning);

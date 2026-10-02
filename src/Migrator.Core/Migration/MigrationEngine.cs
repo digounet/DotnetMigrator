@@ -123,6 +123,7 @@ public sealed class MigrationEngine
                 await VerifyBuildAsync(result, ordered, options, progress, cancellationToken);
                 if (llm != null && result.BuildSucceeded == false)
                     await FixBuildWithLlmAsync(llm, result, ordered, options, progress, cancellationToken);
+                await VerifyRuntimeAsync(result, options, progress, cancellationToken);
             }
         }
 
@@ -140,6 +141,74 @@ public sealed class MigrationEngine
     /// Hosting recommendation per project (using the merged profile of the project plus everything it references),
     /// Dockerfiles for deployable projects and the solution-wide architecture proposal.
     /// </summary>
+    /// <summary>Beyond compiling: run migrated tests, probe /health of web apps, optionally build the Dockerfiles.</summary>
+    private static async Task VerifyRuntimeAsync(SolutionResult result, MigrationOptions options, IProgress<string>? progress, CancellationToken cancellationToken)
+    {
+        var built = result.Projects.Where(p => p.Build is { Succeeded: true } && p.OutputProjectPath != null).ToList();
+        foreach (var project in built)
+        {
+            var projectPath = Path.Combine(result.OutputDir!, project.OutputProjectPath!);
+            var projectDir = Path.GetDirectoryName(projectPath)!;
+            var assembly = string.IsNullOrEmpty(project.Project.AssemblyName) ? project.Project.Name : project.Project.AssemblyName;
+
+            if (options.RunTests && project.Project.Kind == ProjectKind.Test)
+            {
+                progress?.Report($"Executando testes: {project.Project.Name}...");
+                var tests = await RuntimeVerifier.RunTestsAsync(projectPath, result.OutputDir!, TimeSpan.FromMinutes(10), cancellationToken);
+                project.Tests = tests;
+                project.Inventory.Add(tests.Succeeded
+                    ? Runtime(project, InventorySeverity.Info, "TEST-RUN", $"Testes migrados executados: {tests.Passed} passaram{(tests.Skipped > 0 ? $", {tests.Skipped} ignorados" : "")}",
+                        "O projeto de testes compilou e todos os testes passaram no .NET 10.", "Nenhuma ação necessária.", auto: true)
+                    : Runtime(project, tests.Total == 0 && !tests.TimedOut ? InventorySeverity.Info : InventorySeverity.Warning, "TEST-FAILED",
+                        tests.TimedOut ? "Execução dos testes excedeu 10 minutos" : tests.Total == 0 ? "Nenhum teste foi descoberto/executado" : $"Testes migrados: {tests.Failed} falharam, {tests.Passed} passaram",
+                        tests.FailedTests.Count > 0 ? "Falhas: " + string.Join("; ", tests.FailedTests.Take(10)) : "Veja a saída do dotnet test.",
+                        tests.Total == 0 ? "Confira se o adapter de testes (MSTest.TestAdapter / NUnit3TestAdapter / xunit.runner.visualstudio) foi adicionado e se os testes dependem de recursos locais (banco, arquivos)." : "Testes que falham após a migração costumam indicar mudança de comportamento (cultura, fuso, caminhos, serialização); compare com a execução no .NET Framework."));
+            }
+
+            if (options.SmokeTest && project.Project.Kind == ProjectKind.Web)
+            {
+                progress?.Report($"Smoke test (/health): {project.Project.Name}...");
+                var dll = Path.Combine(projectDir, "bin", "Debug", "net10.0", assembly + ".dll");
+                var smoke = await RuntimeVerifier.SmokeTestWebAsync(dll, TimeSpan.FromSeconds(45), cancellationToken);
+                project.Smoke = smoke;
+                project.Inventory.Add(smoke.Succeeded
+                    ? Runtime(project, InventorySeverity.Info, "SMOKE-OK", "Aplicação sobe e responde em /health", smoke.Detail, "Nenhuma ação necessária.", auto: true)
+                    : Runtime(project, InventorySeverity.Warning, "SMOKE-FAILED", "Aplicação não subiu ou /health não respondeu", smoke.Detail,
+                        "Erros de inicialização vêm quase sempre de registros de DI faltando (serviços criados manualmente no Global.asax), configuração ausente ou conexão aberta no startup. Rode 'dotnet run' na pasta do projeto para ver a exceção completa."));
+            }
+        }
+
+        if (options.VerifyDocker)
+        {
+            var withDockerfile = result.Projects.Where(p => p.Hosting is { DockerfileGenerated: true } && p.OutputProjectPath != null).ToList();
+            if (withDockerfile.Count > 0 && !RuntimeVerifier.DockerAvailable())
+                result.GlobalItems.Add(new InventoryItem
+                {
+                    Project = "(solução)", Severity = InventorySeverity.Warning, Category = InventoryCategory.Build, RuleId = "DOCKER-UNAVAILABLE",
+                    Title = "Docker não disponível: imagens não foram construídas", Description = "--verify-docker foi pedido, mas 'docker version' falhou.",
+                    Suggestion = "Inicie o Docker Desktop/daemon e execute novamente, ou valide as imagens no pipeline de CI."
+                });
+            else
+                foreach (var project in withDockerfile)
+                {
+                    progress?.Report($"docker build: {project.Project.Name}...");
+                    var dockerfile = Path.Combine(project.RelativeDir, "Dockerfile");
+                    var tag = $"migrator/{project.Project.Name.ToLowerInvariant()}:verify";
+                    var build = await RuntimeVerifier.DockerBuildAsync(dockerfile, result.OutputDir!, tag, TimeSpan.FromMinutes(20), cancellationToken);
+                    project.DockerBuildSucceeded = build.ExitCode == 0;
+                    project.Inventory.Add(build.ExitCode == 0
+                        ? Runtime(project, InventorySeverity.Info, "DOCKER-OK", $"Imagem Docker construída ({tag})", "docker build concluído com o Dockerfile gerado.", "Nenhuma ação necessária.", auto: true)
+                        : Runtime(project, InventorySeverity.Warning, "DOCKER-FAILED", build.TimedOut ? "docker build excedeu 20 minutos" : $"docker build falhou (código {build.ExitCode})",
+                            RuntimeVerifier.Tail(build.Output), "Erros de restore/compilação dentro da imagem repetem os do build de verificação; erros de COPY indicam arquivo fora do contexto (raiz da solução)."));
+                }
+        }
+    }
+
+    private static InventoryItem Runtime(ProjectResult project, InventorySeverity severity, string rule, string title, string description, string suggestion, bool auto = false) => new()
+    {
+        Project = project.Project.Name, Severity = severity, Category = InventoryCategory.Build, RuleId = rule, Title = title, Description = description, Suggestion = suggestion, AutoMigrated = auto
+    };
+
     private LlmSession? ResolveLlm(MigrationOptions options, SolutionResult result)
     {
         var assistant = _assistant != null

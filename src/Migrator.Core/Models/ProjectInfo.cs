@@ -8,6 +8,9 @@ public sealed class ProjectInfo
     public required string Name { get; init; }
     public string ProjectDir => Path.GetDirectoryName(ProjectPath)!;
 
+    /// <summary>"C#" or "VB". VB.NET projects are profiled and reported but not converted.</summary>
+    public string Language { get; set; } = "C#";
+    public bool IsVisualBasic => Language == "VB";
     public bool IsSdkStyle { get; set; }
     public string TargetFramework { get; set; } = string.Empty;
     public bool IsAlreadyModern { get; set; }
@@ -46,8 +49,10 @@ public sealed class ProjectInfo
     public string? ConfigFilePath { get; set; }
     public List<string> ConfigTransformFiles { get; } = [];
 
+    public string SourceExtension => IsVisualBasic ? ".vb" : ".cs";
+
     public IEnumerable<ProjectItem> SourceFiles =>
-        Items.Where(i => i.ItemType == "Compile" && i.FullPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase));
+        Items.Where(i => i.ItemType == "Compile" && i.FullPath.EndsWith(SourceExtension, StringComparison.OrdinalIgnoreCase));
 
     public bool IsExecutable =>
         OutputType.Equals("Exe", StringComparison.OrdinalIgnoreCase) ||

@@ -35,7 +35,8 @@ public static partial class WorkspaceLoader
             ".sln" => FromSln(full),
             ".slnx" => FromSlnx(full),
             ".csproj" => new Workspace(Path.GetDirectoryName(full)!, Path.GetFileNameWithoutExtension(full), null, [full], []),
-            ".vbproj" or ".fsproj" => throw new NotSupportedException("Apenas projetos C# (.csproj) são suportados."),
+            ".vbproj" => new Workspace(Path.GetDirectoryName(full)!, Path.GetFileNameWithoutExtension(full), null, [full], []),
+            ".fsproj" => throw new NotSupportedException("Projetos F# não são suportados."),
             _ => throw new NotSupportedException($"Tipo de entrada não suportado: {ext}. Informe .sln, .slnx, .csproj ou um diretório.")
         };
     }
@@ -115,8 +116,9 @@ public static partial class WorkspaceLoader
     private static void Classify(string fullPath, List<string> projects, List<(string, string)> skipped, string display)
     {
         var ext = Path.GetExtension(fullPath).ToLowerInvariant();
-        if (ext == ".csproj")
+        if (ext is ".csproj" or ".vbproj")
         {
+            // VB.NET projects are loaded so they can be profiled, counted and placed in the architecture; only C# is converted.
             if (File.Exists(fullPath)) projects.Add(fullPath);
             else skipped.Add((display, "Arquivo de projeto referenciado na solução não existe."));
             return;
@@ -124,7 +126,6 @@ public static partial class WorkspaceLoader
 
         var reason = ext switch
         {
-            ".vbproj" => "Projeto VB.NET: não suportado pela ferramenta. Use o .NET Upgrade Assistant ou converta manualmente.",
             ".fsproj" => "Projeto F#: não suportado pela ferramenta.",
             ".sqlproj" => "Projeto de banco de dados (SSDT): permanece como está; compile com o Visual Studio/MSBuild.",
             ".wixproj" => "Projeto de instalador WiX: revise manualmente para publicar os binários .NET 10.",

@@ -27,8 +27,8 @@ public sealed class SampleSolutionTests : IDisposable
             InputPath = SampleSolution(), DryRun = true, Offline = true, ReportDir = reportDir
         });
 
-        Assert.Equal(["LegacyShop.Web", "LegacyShop.Core", "LegacyShop.Worker", "LegacyShop.Tests", "LegacyShop.Importador"], result.Projects.Select(p => p.Project.Name));
-        Assert.Contains(result.GlobalItems, i => i.RuleId == "SLN-SKIPPED" && i.Title.Contains(".vbproj"));
+        Assert.Equal(["LegacyShop.Web", "LegacyShop.Core", "LegacyShop.Worker", "LegacyShop.Tests", "LegacyShop.Importador", "LegacyShop.Relatorios"], result.Projects.Select(p => p.Project.Name));
+        Assert.DoesNotContain(result.GlobalItems, i => i.RuleId == "SLN-SKIPPED" && i.Title.Contains(".vbproj")); // VB projects are loaded and profiled now
         Assert.Null(result.OutputDir);
 
         var web = result.Projects[0];
@@ -78,6 +78,25 @@ public sealed class SampleSolutionTests : IDisposable
         Assert.Contains(importador.Modernizations, m => m.RuleId == "MOD-CS-PARSE-CULTURE");
         Assert.Contains(importador.Inventory, i => i.RuleId == "AWS-LAMBDA");
 
+        // VB.NET: profiled, not converted
+        var relatorios = result.Projects[5];
+        Assert.True(relatorios.Project.IsVisualBasic);
+        Assert.Equal(ProjectKind.Console, relatorios.Project.Kind);
+        Assert.Contains(relatorios.Inventory, i => i.RuleId == "PRJ-VB" && i.Severity == InventorySeverity.Breaking && i.Title.Contains("3 arquivo(s) .vb"));
+        Assert.Null(relatorios.OutputProjectPath);
+        Assert.Equal(AwsHosting.EcsWindows, relatorios.Hosting!.Primary); // Office Interop (COM) is a hard Windows dependency
+        Assert.Contains(relatorios.Hosting.Prerequisites, p => p.Contains("VB.NET"));
+        Assert.Contains(relatorios.Modernizations, m => m.RuleId == "MOD-WIN-COM");
+        Assert.Contains(relatorios.Modernizations, m => m.RuleId == "MOD-ARCH-SMTP");
+        Assert.Contains(relatorios.Modernizations, m => m.RuleId == "MOD-ARCH-FILES"); // \\arquivos\relatorios in VB code (case-insensitive probes)
+        Assert.Contains("VB.NET (não convertido)", result.Architecture!.Summary);
+
+        // Web Forms page inside the MVC project: sized, moved to _Legacy, MVC/API still migrate
+        Assert.Contains(web.Inventory, i => i.RuleId == "WEB-WEBFORMS" && i.Title.Contains("1 página(s) .aspx") && i.Suggestion.Contains("dias"));
+        Assert.Contains(web.Modernizations, m => m.RuleId == "MOD-ARCH-WEBFORMS");
+        Assert.Equal(AwsHosting.EcsFargate, web.Hosting!.Primary); // mixed MVC + 1 aspx: stays Linux, with a rewrite prerequisite
+        Assert.Contains(web.Hosting.Prerequisites, p => p.Contains("Web Forms"));
+
         var arch = result.Architecture!;
         var services = arch.Components.Select(c => c.Id).ToList();
         foreach (var id in new[] { "ecs", "ecr", "alb", "rds-sqlserver", "s3", "ses", "elasticache", "secrets", "ssm", "cloudwatch", "eventbridge", "vpn", "cicd", "lambda", "s3-events", "storage-gateway", "ses-inbound" })
@@ -85,7 +104,7 @@ public sealed class SampleSolutionTests : IDisposable
         Assert.Equal(["LegacyShop.Importador"], arch.Components.Single(c => c.Id == "lambda").UsedBy);
         Assert.Contains("LegacyShop_Importador", arch.Diagram);
         Assert.Contains("ses_inbound -- e-mail recebido --> LegacyShop_Importador", arch.Diagram);
-        Assert.Equal(["LegacyShop.Importador", "LegacyShop.Web", "LegacyShop.Worker"], arch.Components.Single(c => c.Id == "ses").UsedBy); // Importador ships Core, which sends e-mail
+        Assert.Equal(["LegacyShop.Importador", "LegacyShop.Relatorios", "LegacyShop.Web", "LegacyShop.Worker"], arch.Components.Single(c => c.Id == "ses").UsedBy); // Importador ships Core (sends e-mail); the VB report tool uses SmtpClient
         Assert.Contains("erp.interno", arch.Components.Single(c => c.Id == "vpn").Replaces);
         Assert.Contains("embutidas no código", arch.Components.Single(c => c.Id == "secrets").Replaces);
         Assert.Contains("LegacyShop_Web --> rds_sqlserver", arch.Diagram);
@@ -137,6 +156,11 @@ public sealed class SampleSolutionTests : IDisposable
         Assert.Contains("options.Filters.Add(new RequireHttpsAttribute());", Read("LegacyShop.Web/Program.cs"));
         Assert.True(Exists("LegacyShop.Web/wwwroot/Scripts/jquery-3.4.1.js"));
         Assert.True(Exists("LegacyShop.Web/_Legacy/Global.asax.cs"));
+        Assert.True(Exists("LegacyShop.Web/_Legacy/Relatorios/Vendas.aspx"));
+        Assert.True(Exists("LegacyShop.Web/_Legacy/Relatorios/Vendas.aspx.cs"));
+        Assert.False(Exists("LegacyShop.Web/Relatorios/Vendas.aspx.cs"));
+        Assert.False(Exists("LegacyShop.Relatorios/LegacyShop.Relatorios.vbproj"));
+        Assert.DoesNotContain("Relatorios", Read("LegacyShop.slnx"));
         Assert.False(Exists("LegacyShop.Web/Controllers/LegadoController.cs"));
         Assert.False(Exists("LegacyShop.Web/packages.config"));
         Assert.Contains("Encrypt=False", Read("LegacyShop.Web/appsettings.Production.json"));
@@ -210,7 +234,7 @@ public sealed class SampleSolutionTests : IDisposable
         Assert.Contains("// Serviço de sincronização", Read("LegacyShop.Worker/SincronizacaoService.cs"));
 
         Assert.Contains("MSTest.TestAdapter", Read("LegacyShop.Tests/LegacyShop.Tests.csproj"));
-        Assert.All(result.Projects, p => Assert.NotNull(p.OutputProjectPath));
+        Assert.All(result.Projects.Where(p => !p.Project.IsVisualBasic), p => Assert.NotNull(p.OutputProjectPath));
     }
 
     [Fact]

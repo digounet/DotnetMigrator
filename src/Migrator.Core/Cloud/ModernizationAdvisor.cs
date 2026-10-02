@@ -107,6 +107,13 @@ public static class ModernizationAdvisor
                 merged, "Amazon S3");
         }
 
+        if (p.Get(Signal.WebForms) is { } webForms)
+            yield return Item("MOD-ARCH-WEBFORMS", ModernizationKind.Deprecated, Impact.High, Effort.High,
+                "Web Forms → Razor Pages ou Blazor",
+                $"ASP.NET Web Forms ({webForms.Count} arquivo(s) .aspx/.ascx/.master) não existe no .NET 10 e não há conversor automático confiável; enquanto não for reescrita, a aplicação depende de IIS/Windows.",
+                "Razor Pages é o caminho mais curto (uma página .cshtml + PageModel por .aspx; ViewState e eventos de servidor viram handlers OnGet/OnPost); Blazor Server se houver muita interatividade. Comece pelas páginas mais usadas e exponha a lógica de negócio como serviços reutilizáveis. Páginas de relatório podem virar exportações (QuestPDF/ClosedXML) em vez de telas.",
+                webForms, "Amazon ECS (após a reescrita)");
+
         if (p.Get(Signal.MailboxReading) is { } mailbox)
         {
             var ews = mailbox.Details.Any(d => d.Contains("Exchange", StringComparison.OrdinalIgnoreCase)) || mailbox.Locations.Count > 0 && p.Packages.Any(x => x.Contains("Exchange", StringComparison.OrdinalIgnoreCase));

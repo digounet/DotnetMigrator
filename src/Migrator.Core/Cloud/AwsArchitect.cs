@@ -60,8 +60,21 @@ public static class AwsArchitect
         }
 
         var requiresWindows = rec.RequiresWindows;
+        if (project.IsVisualBasic)
+            rec.Prerequisites.Add("Projeto VB.NET: converter para SDK-style/net10.0 (Upgrade Assistant) ou para C# (CodeConverter) antes de qualquer deploy; o Migrator não gerou a cópia migrada.");
+        var webForms = profile.Get(Signal.WebForms);
+        if (project.Kind == ProjectKind.Web && webForms != null && profile.MvcControllerCount == 0 && profile.ApiControllerCount == 0)
+        {
+            rec.Primary = AwsHosting.Ec2Windows;
+            rec.Rationale.Add($"Aplicação Web Forms ({webForms.Count} arquivo(s) .aspx/.ascx/.master) sem MVC/Web API: não roda no .NET 10 até ser reescrita. Enquanto isso, IIS em EC2 Windows (lift-and-shift) ou permanece on-premises.");
+            rec.Alternatives.Add("Reescrever em Razor Pages/Blazor e então ECS Fargate (Linux) + ALB como as demais aplicações web.");
+            rec.Prerequisites.Insert(0, "Reescrever as páginas Web Forms (item WEB-WEBFORMS do inventário traz a estimativa).");
+            return rec;
+        }
         if (project.Kind == ProjectKind.Web)
         {
+            if (webForms != null)
+                rec.Prerequisites.Add($"Reescrever {webForms.Count} arquivo(s) Web Forms (.aspx/.ascx/.master) que não compilam no .NET 10; o restante (MVC/Web API) migra normalmente.");
             if (requiresWindows)
             {
                 rec.Primary = profile.Has(Signal.IisAdministration) ? AwsHosting.Ec2Windows : AwsHosting.EcsWindows;
@@ -438,7 +451,9 @@ public static class AwsArchitect
                 if (p.Has(Signal.InProcSession)) traits.Add("sessão em memória");
                 if (p.Has(Signal.FileUploads)) traits.Add("upload de arquivos");
                 if (p.Has(Signal.SignalR)) traits.Add("SignalR");
+                if (p.Has(Signal.WebForms)) traits.Add($"{p.Count(Signal.WebForms)} arquivo(s) Web Forms");
             }
+            if (pr.Project.IsVisualBasic) traits.Add("VB.NET (não convertido)");
             else
             {
                 if (p.Has(Signal.WindowsServiceHost)) traits.Add("Windows Service");

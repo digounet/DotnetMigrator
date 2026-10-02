@@ -49,7 +49,7 @@ public static partial class ExcelReport
         {
             row++;
             sheet.Cell(row, 1).Value = project.Project.Name;
-            sheet.Cell(row, 2).Value = ReportWriter.KindLabel(project.Project.Kind);
+            sheet.Cell(row, 2).Value = ReportWriter.KindLabel(project.Project);
             sheet.Cell(row, 3).Value = project.Project.TargetFramework;
             sheet.Cell(row, 4).Value = project.Breaking.Count();
             sheet.Cell(row, 5).Value = project.Warnings.Count();

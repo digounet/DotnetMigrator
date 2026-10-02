@@ -415,6 +415,6 @@ public sealed class LlmTests : IDisposable
             InputPath = sample, DryRun = true, Offline = true, ReportDir = Path.Combine(_work, "r3"), Llm = new LlmOptions { CacheDir = null }
         });
         Assert.Contains(broken.GlobalItems, i => i.RuleId == "LLM-UNAVAILABLE");
-        Assert.Equal(5, broken.Projects.Count); // migration itself unaffected
+        Assert.Equal(6, broken.Projects.Count); // migration itself unaffected
     }
 }

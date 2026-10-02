@@ -56,11 +56,12 @@ public static class RunCommand
         foreach (var p in result.Projects)
         {
             var build = ReportWriter.BuildLabel(result, p);
-            var buildMarkup = p.Build == null ? $"[grey]{Markup.Escape(build)}[/]" : p.Build.Succeeded ? "[green]OK[/]" : $"[red]{Markup.Escape(build)}[/]";
+            var runtimeOk = p.Tests is not { Succeeded: false } && p.Smoke is not { Succeeded: false } && p.DockerBuildSucceeded != false;
+            var buildMarkup = p.Build == null ? $"[grey]{Markup.Escape(build)}[/]" : p.Build.Succeeded && runtimeOk ? $"[green]{Markup.Escape(build)}[/]" : $"[red]{Markup.Escape(build)}[/]";
             var cells = new List<string>
             {
                 Markup.Escape(p.Project.Name),
-                Markup.Escape(ReportWriter.KindLabel(p.Project.Kind)),
+                Markup.Escape(ReportWriter.KindLabel(p.Project)),
                 Markup.Escape(p.Project.TargetFramework),
                 p.Breaking.Count().ToString(),
                 p.Warnings.Count().ToString(),
