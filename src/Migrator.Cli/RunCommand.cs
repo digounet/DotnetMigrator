@@ -9,6 +9,7 @@ public static class RunCommand
 {
     public static async Task<int> ExecuteAsync(MigrationOptions options, CancellationToken cancellationToken)
     {
+        options = AskForNuGetConfigIfNeeded(options);
         SolutionResult result;
         try
         {
@@ -34,6 +35,31 @@ public static class RunCommand
         PrintSummary(result);
         var hasBlocking = result.AllItems.Any(i => i.RequiresAction && i.Severity == InventorySeverity.Breaking);
         return hasBlocking || result.BuildSucceeded == false ? 2 : 0;
+    }
+
+    /// <summary>
+    /// A migrate that will restore packages needs the private feed before the first build, otherwise every restore times out.
+    /// When nothing points to a nuget.config (option, MIGRATOR_NUGET_CONFIG, file at the source root) and a person is at the
+    /// terminal, ask once; in CI (redirected input) the engine probes the feed and skips the build with a clear item instead.
+    /// </summary>
+    private static MigrationOptions AskForNuGetConfigIfNeeded(MigrationOptions options)
+    {
+        if (options.DryRun || !options.VerifyBuild || options.NuGetConfigPath != null || options.NuGetSourceUrl != null) return options;
+        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("MIGRATOR_NUGET_CONFIG"))) return options;
+        if (Console.IsInputRedirected || Console.IsOutputRedirected) return options;
+        var root = Directory.Exists(options.InputPath) ? options.InputPath : Path.GetDirectoryName(Path.GetFullPath(options.InputPath))!;
+        if (Migrator.Core.NuGet.NuGetConfigFile.Find(root) != null) return options;
+
+        AnsiConsole.MarkupLine("[yellow]Nenhum nuget.config encontrado.[/] Se os pacotes vêm de um feed privado (Artifactory/Nexus), informe o arquivo agora: ele é copiado para a raiz da saída e evita que o build de verificação fique esperando o nuget.org.");
+        var answer = AnsiConsole.Prompt(new TextPrompt<string>("Caminho do nuget.config ([grey]Enter[/] para usar nuget.org):").AllowEmpty());
+        answer = answer.Trim().Trim('"');
+        if (answer.Length == 0) return options;
+        if (!File.Exists(answer))
+        {
+            AnsiConsole.MarkupLine($"[red]Arquivo não encontrado:[/] {Markup.Escape(answer)}. Continuando com nuget.org.");
+            return options;
+        }
+        return options with { NuGetConfigPath = Path.GetFullPath(answer) };
     }
 
     private static void PrintSummary(SolutionResult result)
@@ -109,7 +135,9 @@ public static class RunCommand
                   (result.Architecture?.ExecutiveSummary != null ? ", resumo executivo no relatório" : ""));
         }
         if (!result.NuGetChecked && !result.Options.Offline)
-            AnsiConsole.MarkupLine("[yellow]nuget.org inacessível: a compatibilidade dos pacotes não foi verificada.[/]");
+            AnsiConsole.MarkupLine($"[yellow]Feed NuGet inacessível ({Markup.Escape(result.NuGetSource ?? "nuget.org")}): a compatibilidade dos pacotes não foi verificada.[/]");
+        if (result.BuildSkippedReason != null)
+            AnsiConsole.MarkupLine($"[red]Build de verificação não executado:[/] {Markup.Escape(result.BuildSkippedReason)}. Use --nuget-config <arquivo> (ou MIGRATOR_NUGET_CONFIG) com o feed privado.");
 
         if (result.OutputDir != null)
             AnsiConsole.MarkupLine($"Aplicação migrada: [cyan]{Markup.Escape(result.OutputDir)}[/]");

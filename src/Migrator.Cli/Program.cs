@@ -9,7 +9,9 @@ Argument<string> Input() => new("entrada")
     Description = "Caminho da solução (.sln/.slnx), de um projeto (.csproj) ou de um diretório com projetos."
 };
 Option<string?> Report() => new("--report", "-r") { Description = "Pasta onde gravar os relatórios (HTML, Markdown, CSV e Excel)." };
-Option<bool> Offline() => new("--offline") { Description = "Não consultar o nuget.org (a compatibilidade dos pacotes não é verificada)." };
+Option<bool> Offline() => new("--offline") { Description = "Não consultar o feed NuGet (a compatibilidade dos pacotes não é verificada)." };
+Option<string?> NuGetConfig() => new("--nuget-config") { Description = "nuget.config do feed privado (Artifactory/Nexus). Copiado para a raiz da saída e usado na checagem de compatibilidade e no restore do build de verificação. Alternativa: variável MIGRATOR_NUGET_CONFIG." };
+Option<string?> NuGetSource() => new("--nuget-source") { Description = "URL do service index v3 do feed (…/index.json) para a checagem de compatibilidade; gera um nuget.config mínimo quando não houver um." };
 Option<string> Cloud() => new("--cloud") { Description = "Nuvem de destino para a proposta de arquitetura e os Dockerfiles: aws (padrão) ou none.", DefaultValueFactory = _ => "aws" };
 Option<string> Llm() => new("--llm") { Description = "Assistência por LLM (opcional): none (padrão) ou ollama. Com uma LLM, a ferramenta tenta corrigir os erros do build de verificação, rascunha conversões de código legado e escreve o resumo executivo da arquitetura.", DefaultValueFactory = _ => "none" };
 Option<string?> LlmModel() => new("--llm-model") { Description = "Modelo do provedor (ollama: padrão qwen2.5-coder:3b)." };
@@ -37,9 +39,10 @@ var analyzeReport = Report();
 var analyzeOffline = Offline();
 var analyzeCloud = Cloud();
 var analyzeLlm = Llm(); var analyzeLlmModel = LlmModel(); var analyzeLlmEndpoint = LlmEndpoint(); var analyzeLlmNoCache = LlmNoCache(); var analyzeLlmTimeout = LlmTimeout();
+var analyzeNuGetConfig = NuGetConfig(); var analyzeNuGetSource = NuGetSource();
 var analyze = new Command("analyze", "Analisa a aplicação e gera o inventário de migração, as sugestões de modernização e a arquitetura alvo, sem gravar código.")
 {
-    analyzeInput, analyzeReport, analyzeOffline, analyzeCloud, analyzeLlm, analyzeLlmModel, analyzeLlmEndpoint, analyzeLlmNoCache, analyzeLlmTimeout
+    analyzeInput, analyzeReport, analyzeOffline, analyzeCloud, analyzeNuGetConfig, analyzeNuGetSource, analyzeLlm, analyzeLlmModel, analyzeLlmEndpoint, analyzeLlmNoCache, analyzeLlmTimeout
 };
 analyze.SetAction((parse, ct) => RunCommand.ExecuteAsync(new Migrator.Core.Models.MigrationOptions
 {
@@ -47,6 +50,8 @@ analyze.SetAction((parse, ct) => RunCommand.ExecuteAsync(new Migrator.Core.Model
     ReportDir = parse.GetValue(analyzeReport),
     Offline = parse.GetValue(analyzeOffline),
     Cloud = ParseCloud(parse.GetValue(analyzeCloud)),
+    NuGetConfigPath = parse.GetValue(analyzeNuGetConfig),
+    NuGetSourceUrl = parse.GetValue(analyzeNuGetSource),
     Llm = BuildLlm(parse.GetValue(analyzeLlm), parse.GetValue(analyzeLlmModel), parse.GetValue(analyzeLlmEndpoint), 0, parse.GetValue(analyzeLlmNoCache), parse.GetValue(analyzeLlmTimeout)),
     DryRun = true,
     VerifyBuild = false
@@ -57,6 +62,7 @@ var migrateReport = Report();
 var migrateOffline = Offline();
 var migrateCloud = Cloud();
 var migrateLlm = Llm(); var migrateLlmModel = LlmModel(); var migrateLlmEndpoint = LlmEndpoint(); var migrateLlmRounds = LlmRounds(); var migrateLlmNoCache = LlmNoCache(); var migrateLlmTimeout = LlmTimeout();
+var migrateNuGetConfig = NuGetConfig(); var migrateNuGetSource = NuGetSource();
 var output = new Option<string?>("--output", "-o") { Description = "Pasta de saída da aplicação migrada (padrão: <pasta-da-solução>.net10, ao lado da original)." };
 var force = new Option<bool>("--force") { Description = "Substitui uma saída gerada anteriormente pelo Migrator." };
 var keepSecrets = new Option<bool>("--keep-secrets") { Description = "Mantém senhas e chaves dentro do appsettings*.json gerado em vez de movê-las para _secrets/ (não recomendado)." };
@@ -68,7 +74,7 @@ var noBuild = new Option<bool>("--no-build") { Description = "Não executa o bui
 var timeout = new Option<int>("--build-timeout") { Description = "Tempo máximo do build de verificação, em minutos.", DefaultValueFactory = _ => 30 };
 var migrate = new Command("migrate", "Gera uma cópia migrada para .NET 10 (com Dockerfiles), compila a saída e gera o inventário, as sugestões de modernização e a arquitetura alvo.")
 {
-    migrateInput, output, migrateReport, migrateOffline, migrateCloud, force, noBuild, timeout, keepSecrets, noTests, noSmoke, verifyDocker, noInfra,
+    migrateInput, output, migrateReport, migrateOffline, migrateCloud, migrateNuGetConfig, migrateNuGetSource, force, noBuild, timeout, keepSecrets, noTests, noSmoke, verifyDocker, noInfra,
     migrateLlm, migrateLlmModel, migrateLlmEndpoint, migrateLlmRounds, migrateLlmNoCache, migrateLlmTimeout
 };
 migrate.SetAction((parse, ct) => RunCommand.ExecuteAsync(new Migrator.Core.Models.MigrationOptions
@@ -78,6 +84,8 @@ migrate.SetAction((parse, ct) => RunCommand.ExecuteAsync(new Migrator.Core.Model
     ReportDir = parse.GetValue(migrateReport),
     Offline = parse.GetValue(migrateOffline),
     Cloud = ParseCloud(parse.GetValue(migrateCloud)),
+    NuGetConfigPath = parse.GetValue(migrateNuGetConfig),
+    NuGetSourceUrl = parse.GetValue(migrateNuGetSource),
     Llm = BuildLlm(parse.GetValue(migrateLlm), parse.GetValue(migrateLlmModel), parse.GetValue(migrateLlmEndpoint), parse.GetValue(migrateLlmRounds), parse.GetValue(migrateLlmNoCache), parse.GetValue(migrateLlmTimeout)),
     Force = parse.GetValue(force),
     KeepSecrets = parse.GetValue(keepSecrets),
@@ -92,10 +100,11 @@ migrate.SetAction((parse, ct) => RunCommand.ExecuteAsync(new Migrator.Core.Model
 var portfolioInput = new Argument<string>("pasta") { Description = "Pasta que contém as soluções (.sln/.slnx) ou projetos das aplicações; cada solução vira uma aplicação do portfólio." };
 var portfolioReport = Report(); var portfolioOffline = Offline(); var portfolioCloud = Cloud();
 var portfolioLlm = Llm(); var portfolioLlmModel = LlmModel(); var portfolioLlmEndpoint = LlmEndpoint(); var portfolioLlmNoCache = LlmNoCache(); var portfolioLlmTimeout = LlmTimeout();
+var portfolioNuGetConfig = NuGetConfig(); var portfolioNuGetSource = NuGetSource();
 var baseline = new Option<string?>("--baseline") { Description = "portfolio.json de uma execução anterior para comparar a evolução (bloqueantes, atenção, impacto alto, esforço por aplicação)." };
 var portfolio = new Command("portfolio", "Analisa todas as aplicações de uma pasta e consolida: ranking de esforço, gaps mais frequentes, bancos/hosts compartilhados, ondas de migração e serviços AWS.")
 {
-    portfolioInput, portfolioReport, portfolioOffline, portfolioCloud, baseline, portfolioLlm, portfolioLlmModel, portfolioLlmEndpoint, portfolioLlmNoCache, portfolioLlmTimeout
+    portfolioInput, portfolioReport, portfolioOffline, portfolioCloud, portfolioNuGetConfig, portfolioNuGetSource, baseline, portfolioLlm, portfolioLlmModel, portfolioLlmEndpoint, portfolioLlmNoCache, portfolioLlmTimeout
 };
 portfolio.SetAction((parse, ct) => PortfolioCommand.ExecuteAsync(new Migrator.Core.Portfolio.PortfolioOptions
 {
@@ -104,6 +113,8 @@ portfolio.SetAction((parse, ct) => PortfolioCommand.ExecuteAsync(new Migrator.Co
     Offline = parse.GetValue(portfolioOffline),
     Cloud = ParseCloud(parse.GetValue(portfolioCloud)),
     BaselinePath = parse.GetValue(baseline),
+    NuGetConfigPath = parse.GetValue(portfolioNuGetConfig),
+    NuGetSourceUrl = parse.GetValue(portfolioNuGetSource),
     Llm = BuildLlm(parse.GetValue(portfolioLlm), parse.GetValue(portfolioLlmModel), parse.GetValue(portfolioLlmEndpoint), 0, parse.GetValue(portfolioLlmNoCache), parse.GetValue(portfolioLlmTimeout))
 }, ct));
 

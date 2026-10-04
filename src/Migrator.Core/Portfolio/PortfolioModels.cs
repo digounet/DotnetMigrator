@@ -11,6 +11,8 @@ public sealed record PortfolioOptions
     public bool Offline { get; init; }
     public CloudTarget Cloud { get; init; } = CloudTarget.Aws;
     public LlmOptions Llm { get; init; } = new();
+    public string? NuGetConfigPath { get; init; }
+    public string? NuGetSourceUrl { get; init; }
     /// <summary>A previous portfolio.json to compare against (evolution between tool versions or between remediation rounds).</summary>
     public string? BaselinePath { get; init; }
 }

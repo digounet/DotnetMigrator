@@ -87,13 +87,18 @@ public static partial class ProjectMigrator
 
         if (project.IsAlreadyModern)
         {
-            plan.Copy(project.ProjectPath, result.OutputProjectPath);
+            // Already SDK-style, but possibly on netcoreapp/net6/net8 or multi-targeting net48: bring it to net10.0 and align the Microsoft.* packages.
+            var (csproj, tfmBefore, tfmAfter, updatedPackages, packageItems) = await ModernProjectUpdater.UpdateAsync(project, ctx.Planner);
+            plan.Write(result.OutputProjectPath, csproj);
             foreach (var file in ProjectLoader.EnumerateProjectDirectory(project.ProjectDir))
                 if (!file.Equals(project.ProjectPath, StringComparison.OrdinalIgnoreCase))
                     plan.Copy(file, Path.Combine(result.RelativeDir, Path.GetRelativePath(project.ProjectDir, file)));
+            items.AddRange(packageItems);
             items.Add(Item(project, InventorySeverity.Info, InventoryCategory.ProjectFile, "PRJ-MODERN",
-                $"Projeto já é SDK-style moderno ({project.TargetFramework})", "Copiado sem alterações.",
-                "Se ainda não usa net10.0, atualize o TargetFramework e os pacotes Microsoft.* para a linha 10.0.", auto: true));
+                tfmBefore == tfmAfter ? $"Projeto já é SDK-style em {tfmAfter}" : $"Projeto SDK-style atualizado: {tfmBefore} → {tfmAfter}",
+                (tfmBefore == tfmAfter ? "TargetFramework mantido" : "TargetFramework reescrito (TFMs do .NET Framework removidos; netcoreapp/net5+/netstandard → net10.0)") +
+                (updatedPackages > 0 ? $"; {updatedPackages} pacote(s) Microsoft.* alinhados à linha 10.0." : "; nenhum pacote precisou mudar."),
+                "Compile e rode os testes: APIs removidas entre a versão de origem e o .NET 10 aparecem no build de verificação.", auto: true));
             var modernCode = project.SourceFiles.Where(f => File.Exists(f.FullPath)).Select(f => (Path.GetRelativePath(project.ProjectDir, f.FullPath).Replace('\\', '/'), TextFiles.Read(f.FullPath).Text)).ToList();
             var modernProfile = ApplicationProfiler.Analyze(project, modernCode, LoadConfig(project));
             result.Modernizations.AddRange(ModernizationAdvisor.Analyze(project, modernProfile, modernCode, ctx.Cloud));

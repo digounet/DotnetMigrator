@@ -112,10 +112,10 @@ public sealed class PackagePlanner(NuGetClient nuget)
                 $"A versão original só tem binários para .NET Framework ({resolution.Detail}); a ferramenta escolheu a versão mais recente compatível.",
                 (guidance != null ? guidance + " " : "") + "Revise as breaking changes entre as versões (release notes do pacote)."),
             Outcome.Unchecked => Item(project, InventorySeverity.Warning, "PKG-UNCHECKED",
-                $"Compatibilidade não verificada: {label}", "Modo offline ou nuget.org indisponível: a versão original foi mantida.",
+                $"Compatibilidade não verificada: {label}", "Modo offline ou feed NuGet indisponível: a versão original foi mantida.",
                 guidance ?? "Execute novamente sem --offline ou confira o build de verificação (NU1701 indica pacote só para .NET Framework)."),
             Outcome.NotFound => Item(project, InventorySeverity.Warning, "PKG-NOTFOUND",
-                $"Pacote não encontrado no nuget.org: {label}", "Provavelmente vem de um feed privado/corporativo.",
+                $"Pacote não encontrado no feed NuGet: {label}", "Provavelmente vem de outro feed (privado/corporativo) ou foi retirado do ar (unlisted).",
                 "Verifique no feed interno se existe versão para netstandard2.0/net8+/net10; se só existir para .NET Framework, recompile a biblioteca para netstandard2.0 ou net10.0."),
             Outcome.NoCompatible => Item(project, InventorySeverity.Breaking, "PKG-INCOMPATIBLE",
                 $"Sem versão compatível com .NET 10: {label}",
@@ -174,7 +174,7 @@ public sealed class PackagePlanner(NuGetClient nuget)
                         var all = await nuget.GetVersionsAsync(id);
                         return all.Status == LookupStatus.NotFound
                             ? new Resolution(current!, Outcome.NotFound)
-                            : new Resolution(current!, Outcome.Unknown, "versão original não publicada no nuget.org");
+                            : new Resolution(current!, Outcome.Unknown, "versão original não publicada no feed NuGet");
                 }
 
                 var versions = await nuget.GetVersionsAsync(id);

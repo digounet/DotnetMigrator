@@ -683,7 +683,7 @@ public static class AwsArchitect
             var dir = Path.GetDirectoryName(u)?.Replace('\\', '/') ?? "";
             sb.AppendLine($"COPY [\"{u}\", \"{(dir.Length == 0 ? "./" : dir + "/")}\"]");
         }
-        sb.AppendLine("COPY [\"*.slnx\", \"NuGet.config*\", \"Directory.Build.*\", \"./\"]");
+        sb.AppendLine("COPY [\"*.slnx\", \"nuget.config*\", \"NuGet.config*\", \"Directory.Build.*\", \"./\"]");
         sb.AppendLine($"RUN dotnet restore \"{unix}\"");
         sb.AppendLine("COPY . .");
         sb.AppendLine($"RUN dotnet publish \"{unix}\" -c Release -o /app/publish /p:UseAppHost=false");

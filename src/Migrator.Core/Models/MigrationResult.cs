@@ -15,6 +15,10 @@ public sealed record MigrationOptions
     public TimeSpan BuildTimeout { get; init; } = TimeSpan.FromMinutes(30);
     /// <summary>Cloud provider for the architecture proposal and container artifacts. None disables the advisor.</summary>
     public CloudTarget Cloud { get; init; } = CloudTarget.Aws;
+    /// <summary>nuget.config of the private feed (Artifactory/Nexus...). Copied to the output root and used for compatibility lookups and the verification build. Falls back to MIGRATOR_NUGET_CONFIG, then the source root's nuget.config.</summary>
+    public string? NuGetConfigPath { get; init; }
+    /// <summary>Explicit v3 service index URL for compatibility lookups (overrides the nuget.config); a minimal nuget.config is generated from it when none exists.</summary>
+    public string? NuGetSourceUrl { get; init; }
     /// <summary>Keep credentials inside the generated appsettings*.json instead of moving them to _secrets/ (not recommended).</summary>
     public bool KeepSecrets { get; init; }
     /// <summary>Run the migrated test projects (dotnet test) after a successful verification build.</summary>
@@ -85,6 +89,10 @@ public sealed class SolutionResult
     public bool? BuildSucceeded { get; set; }
     public string? BuildLogPath { get; set; }
     public bool NuGetChecked { get; set; }
+    /// <summary>Feed used for compatibility lookups and expected by the restore ("nuget.org (https://api.nuget.org/v3/index.json)" or the private feed).</summary>
+    public string? NuGetSource { get; set; }
+    /// <summary>When the verification build was skipped on purpose (unreachable feed), why.</summary>
+    public string? BuildSkippedReason { get; set; }
     /// <summary>Provider/model used for the LLM-assisted steps, or null when none was configured.</summary>
     public string? LlmModel { get; set; }
     public int LlmCalls { get; set; }

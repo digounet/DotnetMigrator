@@ -55,7 +55,7 @@ public static class ReportWriter
 
     public static string BuildLabel(SolutionResult result, ProjectResult project)
     {
-        if (project.Build is null) return result.Options.DryRun ? "não executado (análise)" : result.Options.VerifyBuild ? "—" : "não executado";
+        if (project.Build is null) return result.Options.DryRun ? "não executado (análise)" : result.BuildSkippedReason != null ? $"não executado ({result.BuildSkippedReason})" : result.Options.VerifyBuild ? "—" : "não executado";
         if (project.Build.BlockedBy != null) return $"bloqueado ({project.Build.BlockedBy} com erros)";
         if (project.Build.Errors > 0) return $"{project.Build.Errors} erro(s)";
         var extras = new List<string>();

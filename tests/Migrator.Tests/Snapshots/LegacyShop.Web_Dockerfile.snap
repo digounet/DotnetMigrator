@@ -7,7 +7,7 @@ WORKDIR /src
 # Restaura primeiro só os .csproj para aproveitar o cache de camadas
 COPY ["LegacyShop.Core/LegacyShop.Core.csproj", "LegacyShop.Core/"]
 COPY ["LegacyShop.Web/LegacyShop.Web.csproj", "LegacyShop.Web/"]
-COPY ["*.slnx", "NuGet.config*", "Directory.Build.*", "./"]
+COPY ["*.slnx", "nuget.config*", "NuGet.config*", "Directory.Build.*", "./"]
 RUN dotnet restore "LegacyShop.Web/LegacyShop.Web.csproj"
 COPY . .
 RUN dotnet publish "LegacyShop.Web/LegacyShop.Web.csproj" -c Release -o /app/publish /p:UseAppHost=false

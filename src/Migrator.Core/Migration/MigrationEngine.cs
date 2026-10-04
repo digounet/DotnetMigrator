@@ -61,7 +61,9 @@ public sealed class MigrationEngine
         var llm = ResolveLlm(options, result);
 
         var map = projects.ToDictionary(p => p.ProjectPath, p => Path.GetRelativePath(workspace.RootDir, p.ProjectPath), StringComparer.OrdinalIgnoreCase);
-        using var nuget = new NuGetClient(options.Offline);
+        var (nugetConfig, nugetSource) = ResolveNuGetSource(options, workspace.RootDir, result);
+        result.NuGetSource = nugetSource.ToString();
+        using var nuget = new NuGetClient(options.Offline, nugetSource);
         var context = new ProjectMigrationContext(workspace.RootDir, map, new PackagePlanner(nuget), UsesSystemDataSqlClient(projects), options.Cloud, workspace.Name, options.KeepSecrets);
 
         var migrated = new List<MigratedProject>();
@@ -90,8 +92,10 @@ public sealed class MigrationEngine
             result.GlobalItems.Add(new InventoryItem
             {
                 Project = "(solução)", Severity = InventorySeverity.Warning, Category = InventoryCategory.Package, RuleId = "NUGET-OFFLINE",
-                Title = "nuget.org inacessível", Description = "A compatibilidade dos pacotes não pôde ser verificada (proxy/firewall?).",
-                Suggestion = "Configure o proxy (HTTPS_PROXY) e execute novamente; enquanto isso, confie no build de verificação (avisos NU1701)."
+                Title = $"Feed NuGet inacessível: {nuget.Source.Name}", Description = $"A compatibilidade dos pacotes não pôde ser verificada em {nuget.Source.IndexUrl}.",
+                Suggestion = nuget.Source.IsNuGetOrg
+                    ? "Configure o proxy (HTTPS_PROXY) ou informe o nuget.config do feed privado (--nuget-config) e execute novamente; enquanto isso, confie no build de verificação (avisos NU1701)."
+                    : "Confira a URL do service index (deve terminar em index.json), as credenciais do nuget.config e o acesso de rede (VPN/proxy); enquanto isso, confie no build de verificação (avisos NU1701)."
             });
 
         progress?.Report("Alinhando versões de pacotes entre projetos...");
@@ -130,13 +134,18 @@ public sealed class MigrationEngine
             foreach (var project in migrated) await ApplyAsync(project.Plan, result.OutputDir!);
             WriteSolution(result, workspace);
             CopyRootFiles(workspace.RootDir, result.OutputDir!, result);
+            WriteNuGetConfig(nugetConfig, nugetSource, result);
             WriteRootGitIgnore(result.OutputDir!);
             await File.WriteAllTextAsync(Path.Combine(result.OutputDir!, WorkspaceLoader.OutputMarkerFile),
                 $"Gerado pelo Migrator em {DateTime.Now:O} a partir de {workspace.RootDir}{Environment.NewLine}", cancellationToken);
 
             if (llm != null) await new LlmCodeDrafter(llm, options.Llm, result.OutputDir!).DraftAsync(result, progress, cancellationToken);
 
-            if (options.VerifyBuild && ordered.Count > 0)
+            if (options.VerifyBuild && ordered.Count > 0 && !await FeedReachableAsync(nugetSource, result, progress, cancellationToken))
+            {
+                // Nothing restores without the feed: skipping is faster and clearer than a 30-minute cascade of timeouts.
+            }
+            else if (options.VerifyBuild && ordered.Count > 0)
             {
                 await VerifyBuildAsync(result, ordered, options, progress, cancellationToken);
                 if (llm != null && result.BuildSucceeded == false)
@@ -390,6 +399,90 @@ public sealed class MigrationEngine
         if (missing.Count == 0) return;
         var header = existing.Count == 0 ? "# Gerado pelo Migrator" + Environment.NewLine : Environment.NewLine + "# Acrescentado pelo Migrator" + Environment.NewLine;
         File.AppendAllText(path, header + string.Join(Environment.NewLine, missing) + Environment.NewLine);
+    }
+
+    /// <summary>Order of precedence: --nuget-config, MIGRATOR_NUGET_CONFIG, nuget.config at the source root. --nuget-source overrides the feed URL.</summary>
+    private static (string? ConfigPath, NuGetSource Source) ResolveNuGetSource(MigrationOptions options, string rootDir, SolutionResult result)
+    {
+        var configPath = options.NuGetConfigPath ?? Environment.GetEnvironmentVariable("MIGRATOR_NUGET_CONFIG");
+        if (!string.IsNullOrWhiteSpace(configPath))
+        {
+            configPath = Path.GetFullPath(configPath);
+            if (!File.Exists(configPath)) throw new FileNotFoundException($"nuget.config não encontrado: {configPath}");
+        }
+        else configPath = NuGetConfigFile.Find(rootDir);
+
+        NuGetSource source;
+        if (!string.IsNullOrWhiteSpace(options.NuGetSourceUrl)) source = new NuGetSource("feed configurado", options.NuGetSourceUrl.Trim());
+        else if (configPath != null)
+        {
+            try { source = NuGetConfigFile.Primary(configPath); }
+            catch (Exception ex) when (ex is System.Xml.XmlException or InvalidOperationException or IOException)
+            {
+                result.GlobalItems.Add(new InventoryItem
+                {
+                    Project = "(solução)", Severity = InventorySeverity.Warning, Category = InventoryCategory.Package, RuleId = "NUGET-CONFIG-INVALID",
+                    Title = $"nuget.config inválido: {Path.GetFileName(configPath)}", Description = ex.Message, Suggestion = "Corrija o XML; enquanto isso a ferramenta usa nuget.org."
+                });
+                source = NuGetSource.NuGetOrg;
+            }
+        }
+        else source = NuGetSource.NuGetOrg;
+        return (configPath, source);
+    }
+
+    /// <summary>The output always carries a nuget.config when a private feed is involved: copied from the given file, or generated from --nuget-source.</summary>
+    private static void WriteNuGetConfig(string? configPath, NuGetSource source, SolutionResult result)
+    {
+        var target = Path.Combine(result.OutputDir!, "nuget.config");
+        var explicitConfig = configPath != null && !Path.GetDirectoryName(configPath)!.Equals(result.RootDir.TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase);
+        if (explicitConfig)
+        {
+            foreach (var stale in Directory.EnumerateFiles(result.OutputDir!).Where(f => Path.GetFileName(f).Equals("nuget.config", StringComparison.OrdinalIgnoreCase))) File.Delete(stale);
+            File.Copy(configPath!, target, overwrite: true);
+            result.GlobalItems.Add(new InventoryItem
+            {
+                Project = "(solução)", Severity = InventorySeverity.Info, Category = InventoryCategory.Package, RuleId = "NUGET-CONFIG",
+                Title = "nuget.config do feed privado copiado para a raiz da saída", Description = $"{configPath} → nuget.config. O restore (local, Docker e CI) usa {source}.",
+                Suggestion = "Se o arquivo tiver credenciais em texto claro, prefira variáveis de ambiente (%ARTIFACTORY_TOKEN%) ou o Credential Provider do feed.", AutoMigrated = true, FilePath = "nuget.config"
+            });
+        }
+        else if (!source.IsNuGetOrg && NuGetConfigFile.Find(result.OutputDir!) == null)
+        {
+            File.WriteAllText(target, $"""
+                <?xml version="1.0" encoding="utf-8"?>
+                <configuration>
+                  <packageSources>
+                    <clear />
+                    <add key="{source.Name}" value="{source.IndexUrl}" />
+                  </packageSources>
+                </configuration>
+
+                """.Replace("\r\n", "\n"));
+            result.GlobalItems.Add(new InventoryItem
+            {
+                Project = "(solução)", Severity = InventorySeverity.Info, Category = InventoryCategory.Package, RuleId = "NUGET-CONFIG",
+                Title = "nuget.config gerado a partir de --nuget-source", Description = $"Fonte única: {source.IndexUrl}.", Suggestion = "Acrescente credenciais (packageSourceCredentials) se o feed exigir.", AutoMigrated = true, FilePath = "nuget.config"
+            });
+        }
+    }
+
+    private static async Task<bool> FeedReachableAsync(NuGetSource source, SolutionResult result, IProgress<string>? progress, CancellationToken cancellationToken)
+    {
+        progress?.Report($"Verificando acesso ao feed NuGet ({source.Name})...");
+        var (ok, detail) = await NuGetClient.ProbeAsync(source, TimeSpan.FromSeconds(12), cancellationToken: cancellationToken);
+        if (ok) return true;
+        result.BuildSkippedReason = "feed NuGet inacessível";
+        result.GlobalItems.Add(new InventoryItem
+        {
+            Project = "(solução)", Severity = InventorySeverity.Breaking, Category = InventoryCategory.Build, RuleId = "BUILD-NUGET-UNREACHABLE",
+            Title = $"Feed NuGet inacessível: build de verificação não executado ({source.Name})",
+            Description = $"{detail}. Sem o feed, cada restore esperaria o timeout do NuGet; a ferramenta pulou o build, os testes e o smoke test.",
+            Suggestion = source.IsNuGetOrg
+                ? "A rede bloqueia o nuget.org? Informe o nuget.config do feed privado (Artifactory/Nexus) com --nuget-config <arquivo> ou MIGRATOR_NUGET_CONFIG, ou a URL v3 com --nuget-source; ele é copiado para a raiz da saída e usado no restore."
+                : "Confira a URL do service index (deve terminar em index.json), as credenciais do nuget.config e o acesso de rede (VPN/proxy)."
+        });
+        return false;
     }
 
     /// <summary>Source and project files keep the BOM Visual Studio writes; scripts, Terraform, YAML, Markdown and Docker files must not have one (a BOM breaks "#!" and terraform fmt).</summary>

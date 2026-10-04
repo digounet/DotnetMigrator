@@ -20,10 +20,12 @@ public sealed record PackageCompatibility(CompatStatus Status, IReadOnlyList<str
 
 public sealed class NuGetClient : IDisposable
 {
-    private const string FlatContainer = "https://api.nuget.org/v3-flatcontainer/";
-    private const string Registration = "https://api.nuget.org/v3/registration5-gz-semver2/";
+    private const string NuGetOrgFlatContainer = "https://api.nuget.org/v3-flatcontainer/";
+    private const string NuGetOrgRegistration = "https://api.nuget.org/v3/registration5-gz-semver2/";
 
     private readonly HttpClient? _http;
+    private readonly Lazy<Task<(string FlatContainer, string Registration)>> _resources;
+    public NuGetSource Source { get; }
     private readonly SemaphoreSlim _throttle = new(8);
     private readonly ConcurrentDictionary<string, Task<VersionList>> _versions = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, Task<PackageCompatibility>> _compat = new(StringComparer.OrdinalIgnoreCase);
@@ -36,14 +38,66 @@ public sealed class NuGetClient : IDisposable
         "netstandard2.1", "netstandard2.0", "netstandard1.6", "netstandard1.3", "netstandard1.0"
     ];
 
-    public NuGetClient(bool offline)
+    public NuGetClient(bool offline, NuGetSource? source = null, HttpMessageHandler? handler = null)
     {
+        Source = source ?? NuGetSource.NuGetOrg;
+        // nuget.org endpoints are well known; any other feed (Artifactory, Nexus, Azure Artifacts) is discovered through its service index.
+        // Offline: the lookups short-circuit before any request, so the constants are only placeholders.
+        _resources = offline || Source.IsNuGetOrg
+            ? new Lazy<Task<(string, string)>>(() => Task.FromResult((NuGetOrgFlatContainer, NuGetOrgRegistration)))
+            : new Lazy<Task<(string, string)>>(ResolveResourcesAsync);
         if (offline) return;
-        _http = new HttpClient(new SocketsHttpHandler { AutomaticDecompression = DecompressionMethods.All })
+        _http = new HttpClient(handler ?? new SocketsHttpHandler { AutomaticDecompression = DecompressionMethods.All })
         {
             Timeout = TimeSpan.FromSeconds(20)
         };
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("NetFrameworkMigrator/1.0");
+        if (Source.HasCredentials)
+            _http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic",
+                Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"{Source.UserName}:{Source.Password}")));
+    }
+
+    /// <summary>Reads the v3 service index and picks the PackageBaseAddress and RegistrationsBaseUrl resources.</summary>
+    private async Task<(string FlatContainer, string Registration)> ResolveResourcesAsync()
+    {
+        var (status, index) = await GetJsonAsync(Source.IndexUrl);
+        if (status != LookupStatus.Found || !index!.RootElement.TryGetProperty("resources", out var resources))
+        {
+            Volatile.Write(ref _consecutiveFailures, 5); // the feed is unusable: behave as offline instead of silently hitting nuget.org
+            return (NuGetOrgFlatContainer, NuGetOrgRegistration);
+        }
+        string? flat = null; var registration = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var r in resources.EnumerateArray())
+        {
+            var type = r.TryGetProperty("@type", out var t) ? t.GetString() ?? "" : "";
+            var id = r.TryGetProperty("@id", out var i) ? i.GetString() ?? "" : "";
+            if (id.Length == 0) continue;
+            if (type.StartsWith("PackageBaseAddress/3.0.0", StringComparison.OrdinalIgnoreCase)) flat ??= id;
+            if (type.StartsWith("RegistrationsBaseUrl", StringComparison.OrdinalIgnoreCase)) registration[type] = id;
+        }
+        var reg = registration.GetValueOrDefault("RegistrationsBaseUrl/3.6.0") ?? registration.GetValueOrDefault("RegistrationsBaseUrl/3.4.0")
+                  ?? registration.GetValueOrDefault("RegistrationsBaseUrl/Versioned") ?? registration.GetValueOrDefault("RegistrationsBaseUrl") ?? registration.Values.FirstOrDefault();
+        if (flat == null || reg == null) { Volatile.Write(ref _consecutiveFailures, 5); return (NuGetOrgFlatContainer, NuGetOrgRegistration); }
+        return (flat.TrimEnd('/') + "/", reg.TrimEnd('/') + "/");
+    }
+
+    /// <summary>Quick reachability check of a feed's service index, used before the verification build so a blocked nuget.org fails in seconds instead of timing out restores.</summary>
+    public static async Task<(bool Ok, string Detail)> ProbeAsync(NuGetSource source, TimeSpan timeout, HttpMessageHandler? handler = null, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            using var http = new HttpClient(handler ?? new SocketsHttpHandler()) { Timeout = timeout };
+            if (source.HasCredentials)
+                http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"{source.UserName}:{source.Password}")));
+            using var response = await http.GetAsync(source.IndexUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            return response.IsSuccessStatusCode
+                ? (true, $"{source.IndexUrl} respondeu {(int)response.StatusCode}")
+                : (false, $"{source.IndexUrl} respondeu {(int)response.StatusCode} {response.ReasonPhrase}{(response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden ? " (credenciais do nuget.config?)" : "")}");
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or UriFormatException or InvalidOperationException)
+        {
+            return (false, $"{source.IndexUrl}: {(ex is TaskCanceledException ? $"sem resposta em {timeout.TotalSeconds:0}s" : ex.Message)}");
+        }
     }
 
     public bool IsOnline => _http != null && Volatile.Read(ref _consecutiveFailures) < 5;
@@ -56,7 +110,8 @@ public sealed class NuGetClient : IDisposable
 
     private async Task<VersionList> FetchVersionsAsync(string id)
     {
-        var (status, json) = await GetJsonAsync($"{FlatContainer}{id.ToLowerInvariant()}/index.json");
+        var (flatContainer, _) = await _resources.Value;
+        var (status, json) = await GetJsonAsync($"{flatContainer}{id.ToLowerInvariant()}/index.json");
         if (status != LookupStatus.Found) return new VersionList(status, []);
 
         var versions = new List<NuGetVersion>();
@@ -98,7 +153,8 @@ public sealed class NuGetClient : IDisposable
     private Task<(LookupStatus Status, JsonDocument? Leaf)> GetCatalogLeafAsync(string id, NuGetVersion version) =>
         _leaves.GetOrAdd($"{id}/{version.ToNormalizedString()}", async _ =>
         {
-            var leafUrl = $"{Registration}{id.ToLowerInvariant()}/{version.ToNormalizedString().ToLowerInvariant()}.json";
+            var (_, registration) = await _resources.Value;
+            var leafUrl = $"{registration}{id.ToLowerInvariant()}/{version.ToNormalizedString().ToLowerInvariant()}.json";
             var (status, leaf) = await GetJsonAsync(leafUrl);
             if (status != LookupStatus.Found) return (status, null);
             if (!leaf!.RootElement.TryGetProperty("catalogEntry", out var catalogEntry) || catalogEntry.ValueKind != JsonValueKind.String)

@@ -15,6 +15,7 @@ Tipos de projeto suportados: ASP.NET MVC 5, ASP.NET Web API 2, console, Windows 
 - [Assistência por LLM (opcional)](#assistência-por-llm-opcional)
 - [Modo portfólio](#modo-portfólio)
 - [Infraestrutura como código e CI/CD](#infraestrutura-como-código-e-cicd)
+- [Feed NuGet privado (Artifactory, Nexus)](#feed-nuget-privado-artifactory-nexus)
 - [Exemplo: antes e depois](#exemplo-antes-e-depois)
 - [Lendo o inventário](#lendo-o-inventário)
 - [Fluxo de trabalho recomendado](#fluxo-de-trabalho-recomendado)
@@ -140,7 +141,7 @@ Cada etapa registra o que fez no inventário: o que foi resolvido automaticament
 | Console | `OutputType` `Exe`/`WinExe` |
 | Biblioteca | demais casos |
 
-Projetos que **já são** SDK-style com `netstandard`/`net5+` são copiados sem alteração.
+Projetos que **já são** SDK-style com `netstandard`/`netcoreapp`/`net5+` não passam pelas reescritas de código, mas o `.csproj` é atualizado: monikers do .NET Framework saem de listas multi-target, `netcoreapp`/`net5+`/`netstandard` viram `net10.0` (preservando sufixos como `-windows`) e os pacotes `Microsoft.*` são alinhados à linha 10.0 (`PRJ-MODERN`).
 
 ### 2. Classificação dos arquivos
 
@@ -540,6 +541,23 @@ O código gerado para o sample passa em `terraform fmt -check`, `terraform init`
 
 ---
 
+## Feed NuGet privado (Artifactory, Nexus)
+
+Em redes corporativas o `nuget.org` costuma ser bloqueado e os pacotes vêm de um feed privado. Sem o `nuget.config` certo, cada restore do build de verificação esperaria o timeout do NuGet. A ferramenta trata isso em três pontos:
+
+1. **Informe o `nuget.config` antes do build**: `--nuget-config <arquivo>` (ou a variável `MIGRATOR_NUGET_CONFIG`). Se não houver nenhum (nem na raiz da solução de origem) e você estiver no terminal, o `migrate` **pergunta** o caminho antes de começar; em CI (entrada redirecionada) não pergunta. O arquivo é copiado para a **raiz da saída** como `nuget.config`, então restore local, Docker (`COPY nuget.config*`) e o workflow de deploy usam o mesmo feed. Alternativa sem arquivo: `--nuget-source <url do index.json>` gera um `nuget.config` mínimo.
+2. **Checagem de compatibilidade pelo mesmo feed**: a consulta de versões/frameworks dos pacotes (etapa 7) usa a primeira fonte v3 do `nuget.config` (service index `…/index.json`, com `packageSourceCredentials` em texto claro ou `%VARIAVEL%`), não mais o nuget.org fixo. Se o feed não responder, a ferramenta marca a compatibilidade como não verificada em vez de tentar o nuget.org.
+3. **Sondagem antes do build**: antes do primeiro `dotnet build`, um `GET` no service index com 12 s de limite. Se falhar, o build, os testes e o smoke test são pulados com o item bloqueante `BUILD-NUGET-UNREACHABLE` explicando o motivo e a correção, em vez de um cascateamento de timeouts de 30 minutos.
+
+```powershell
+migrator migrate C:\src\Loja\Loja.sln --nuget-config C:\src\nuget.config
+$env:MIGRATOR_NUGET_CONFIG = "C:\src\nuget.config"   # vale para todas as execuções, inclusive portfolio
+```
+
+Credenciais: prefira `%ARTIFACTORY_TOKEN%` no `nuget.config` (expandido em tempo de execução) a senhas em texto claro; senhas criptografadas pelo NuGet (`Password`, DPAPI) só funcionam no Windows e não são lidas pela ferramenta.
+
+---
+
 ## Exemplo: antes e depois
 
 Controller Web API 2 original:
@@ -685,7 +703,7 @@ dotnet run --project src/Migrator.Cli -- migrate samples\LegacyShop\LegacyShop.s
 ## Referência da linha de comando
 
 ```
-migrator analyze <entrada> [--report <pasta>] [--offline] [--cloud aws|none] [--llm none|ollama] [--llm-model <m>] [--llm-endpoint <url>] [--llm-timeout <min>] [--llm-no-cache]
+migrator analyze <entrada> [--report <pasta>] [--offline] [--nuget-config <arquivo>] [--nuget-source <url>] [--cloud aws|none] [--llm none|ollama] [--llm-model <m>] [--llm-endpoint <url>] [--llm-timeout <min>] [--llm-no-cache]
 migrator portfolio <pasta> [--report <pasta>] [--offline] [--cloud aws|none] [--baseline <portfolio.json>] [--llm ...]
 migrator migrate <entrada> [--output <pasta>] [--report <pasta>] [--offline] [--cloud aws|none] [--force] [--no-build] [--build-timeout <min>]
                  [--no-tests] [--no-smoke] [--verify-docker] [--keep-secrets] [--no-infra]
@@ -697,7 +715,9 @@ migrator migrate <entrada> [--output <pasta>] [--report <pasta>] [--offline] [--
 | `<entrada>` | ambos | `.sln`, `.slnx`, `.csproj` ou pasta com projetos |
 | `--output`, `-o` | migrate | Pasta de saída (padrão: `<pasta-pai>\<nome-da-solução>.net10`) |
 | `--report`, `-r` | ambos | Pasta dos relatórios (padrão: `<saída>\_migration-report` no migrate; `<pasta-pai>\<nome>.migration-report` no analyze) |
-| `--offline` | ambos | Não consulta o nuget.org |
+| `--offline` | todos | Não consulta o feed NuGet (compatibilidade não verificada) |
+| `--nuget-config` | todos | `nuget.config` do feed privado; copiado para a raiz da saída e usado na compatibilidade e no restore (alternativa: `MIGRATOR_NUGET_CONFIG`) |
+| `--nuget-source` | todos | URL do service index v3 do feed; gera um `nuget.config` mínimo se não houver |
 | `--cloud` | ambos | Nuvem de destino da proposta de arquitetura e dos Dockerfiles: `aws` (padrão) ou `none` |
 | `--llm` | ambos | Assistência por LLM: `none` (padrão) ou `ollama`; veja [Assistência por LLM](#assistência-por-llm-opcional) |
 | `--llm-model`, `--llm-endpoint` | ambos | Modelo e endpoint do provedor |

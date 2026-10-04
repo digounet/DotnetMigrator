@@ -16,7 +16,7 @@ public static partial class MarkdownReport
         sb.AppendLine($"- **Modo:** {ReportWriter.ModeLabel(result)}");
         if (result.OutputDir != null) sb.AppendLine($"- **Saída:** `{result.OutputDir}`");
         sb.AppendLine($"- **Gerado em:** {result.FinishedAt:dd/MM/yyyy HH:mm}");
-        sb.AppendLine($"- **Compatibilidade NuGet verificada:** {(result.NuGetChecked ? "sim" : "não")}");
+        sb.AppendLine($"- **Compatibilidade NuGet verificada:** {(result.NuGetChecked ? "sim" : "não")}{(result.NuGetSource != null ? $" (feed: {result.NuGetSource})" : "")}");
         sb.AppendLine($"- **Build de verificação:** {result.BuildSucceeded switch { true => "sucesso", false => "com erros", null => "não executado" }}");
         if (result.LlmModel != null) sb.AppendLine($"- **LLM:** {result.LlmModel} ({result.LlmCalls} chamada(s))");
         sb.AppendLine();
@@ -93,7 +93,7 @@ public static partial class MarkdownReport
                 sb.AppendLine($"<details><summary>{g.Key.RuleId} — {g.Count()} ocorrência(s)</summary>");
                 sb.AppendLine();
                 foreach (var i in g.Take(MaxBuildExamples))
-                    sb.AppendLine($"- `{ReportWriter.Location(i)}` {Inline(i.Description)}");
+                    sb.AppendLine(i.FilePath != null ? $"- `{ReportWriter.Location(i)}` {Inline(i.Description)}" : $"- {Inline(i.Description)}");
                 if (g.Count() > MaxBuildExamples) sb.AppendLine($"- ... e mais {g.Count() - MaxBuildExamples} (veja inventory.xlsx)");
                 sb.AppendLine();
                 sb.AppendLine("</details>");

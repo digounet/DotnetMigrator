@@ -114,7 +114,7 @@ public static partial class HtmlReport
         sb.Append($"<span>Modo: {E(ReportWriter.ModeLabel(result))}</span>");
         if (result.OutputDir != null) sb.Append($"<span>Saída: {E(result.OutputDir)}</span>");
         sb.Append($"<span>Gerado em {result.FinishedAt:dd/MM/yyyy HH:mm}</span>");
-        sb.Append($"<span>NuGet verificado: {(result.NuGetChecked ? "sim" : "não")}</span>");
+        sb.Append($"<span>NuGet verificado: {(result.NuGetChecked ? "sim" : "não")}{(result.NuGetSource != null ? $" · feed: {E(result.NuGetSource)}" : "")}</span>");
         sb.Append($"<span>Build: {result.BuildSucceeded switch { true => "sucesso", false => "com erros", null => "não executado" }}</span>");
         if (result.LlmModel != null) sb.Append($"<span>LLM: {E(result.LlmModel)} ({result.LlmCalls} chamada(s))</span>");
         sb.Append("</div></header><main>");
