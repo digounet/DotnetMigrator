@@ -154,7 +154,7 @@ public sealed class NuGetSourceTests : IDisposable
         // end to end through the engine: the copy on disk is the rewritten one
         var output = Path.Combine(_work, "out");
         var result = await new MigrationEngine().RunAsync(new MigrationOptions { Target = MigrationTarget.Net10, InputPath = csproj, OutputDir = output, Offline = true, VerifyBuild = false, Cloud = CloudTarget.None });
-        Assert.Contains("<TargetFramework>net10.0</TargetFramework>", File.ReadAllText(Path.Combine(output, "Lib.csproj")));
+        Assert.Contains("<TargetFramework>net10.0</TargetFramework>", File.ReadAllText(Path.Combine(output, "app", "src", "Lib.csproj")));
         Assert.Contains(result.Projects[0].Inventory, i => i.RuleId == "PRJ-MODERN" && i.Title.Contains("net48;net6.0 → net10.0"));
     }
 
@@ -178,8 +178,8 @@ public sealed class NuGetSourceTests : IDisposable
         });
 
         Assert.Equal("artifactory (http://127.0.0.1:9/artifactory/api/nuget/v3/remote/index.json)", result.NuGetSource);
-        Assert.True(File.Exists(Path.Combine(output, "nuget.config")));
-        Assert.Contains("api/nuget/v3/remote", File.ReadAllText(Path.Combine(output, "nuget.config")));
+        Assert.True(File.Exists(Path.Combine(output, "app", "src", "nuget.config")));
+        Assert.Contains("api/nuget/v3/remote", File.ReadAllText(Path.Combine(output, "app", "src", "nuget.config")));
         Assert.Contains(result.GlobalItems, i => i.RuleId == "NUGET-CONFIG" && i.AutoMigrated);
         Assert.Contains(result.GlobalItems, i => i.RuleId == "BUILD-NUGET-UNREACHABLE" && i.Severity == InventorySeverity.Breaking);
         Assert.Equal("feed NuGet inacessível", result.BuildSkippedReason);

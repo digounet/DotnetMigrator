@@ -27,17 +27,25 @@ static Migrator.Core.Models.IacTool? ParseIac(string? value) => value?.Trim().To
     "cloudformation" or "cfn" or "cf" => Migrator.Core.Models.IacTool.CloudFormation,
     _ => Migrator.Core.Models.IacTool.Terraform
 };
-Option<string> Llm() => new("--llm") { Description = "Assistência por LLM (opcional): none (padrão) ou ollama. Com uma LLM, a ferramenta tenta corrigir os erros do build de verificação, rascunha conversões de código legado e escreve o resumo executivo da arquitetura.", DefaultValueFactory = _ => "none" };
-Option<string?> LlmModel() => new("--llm-model") { Description = "Modelo do provedor (ollama: padrão qwen2.5-coder:3b)." };
-Option<string?> LlmEndpoint() => new("--llm-endpoint") { Description = "Endpoint do provedor (ollama: padrão http://localhost:11434)." };
+Option<string> Llm() => new("--llm") { Description = "Assistência por LLM (opcional): none (padrão), ollama (local) ou api (LLM corporativa via API com client credentials). Com uma LLM, a ferramenta tenta corrigir os erros do build de verificação, rascunha conversões de código legado e escreve o resumo executivo da arquitetura.", DefaultValueFactory = _ => "none" };
+Option<string?> LlmModel() => new("--llm-model") { Description = "Modelo do provedor (ollama: padrão qwen2.5-coder:3b; api: nome enviado no corpo, ou MIGRATOR_LLM_MODEL)." };
+Option<string?> LlmEndpoint() => new("--llm-endpoint") { Description = "Endpoint do provedor (ollama: padrão http://localhost:11434; api: a URL do gateway é fixa no código, esta opção só sobrepõe para testes)." };
+Option<string?> LlmClientId() => new("--llm-client-id") { Description = "api: client_id do OAuth2 (ou MIGRATOR_LLM_CLIENT_ID)." };
+Option<string?> LlmClientSecret() => new("--llm-client-secret") { Description = "api: client_secret do OAuth2 (prefira a variável MIGRATOR_LLM_CLIENT_SECRET para não ficar no histórico do shell)." };
+Option<string?> LlmTokenUrl() => new("--llm-token-url") { Description = "api: sobrepõe o endpoint de token OAuth2 fixo no código (ou MIGRATOR_LLM_TOKEN_URL)." };
+Option<string?> LlmScope() => new("--llm-scope") { Description = "api: escopo do token (ou MIGRATOR_LLM_SCOPE)." };
 Option<int> LlmRounds() => new("--llm-rounds") { Description = "Máximo de rodadas build → correção → build com a LLM.", DefaultValueFactory = _ => 3 };
 Option<bool> LlmNoCache() => new("--llm-no-cache") { Description = "Não usar o cache de respostas da LLM (~/.migrator/llm-cache)." };
 Option<int> LlmTimeout() => new("--llm-timeout") { Description = "Tempo máximo de cada chamada à LLM, em minutos (modelos locais podem ser lentos).", DefaultValueFactory = _ => 6 };
-static Migrator.Core.Llm.LlmOptions BuildLlm(string? provider, string? model, string? endpoint, int rounds, bool noCache, int timeoutMinutes) => new()
+static Migrator.Core.Llm.LlmOptions BuildLlm(string? provider, string? model, string? endpoint, int rounds, bool noCache, int timeoutMinutes, string? clientId = null, string? clientSecret = null, string? tokenUrl = null, string? scope = null) => new()
 {
     Provider = string.IsNullOrWhiteSpace(provider) ? "none" : provider,
     Model = model,
     Endpoint = endpoint,
+    ClientId = clientId,
+    ClientSecret = clientSecret,
+    TokenUrl = tokenUrl,
+    Scope = scope,
     MaxFixRounds = Math.Max(0, rounds),
     CacheDir = noCache ? null : Migrator.Core.Llm.LlmOptions.DefaultCacheDir,
     Timeout = TimeSpan.FromMinutes(Math.Max(1, timeoutMinutes))
@@ -53,10 +61,11 @@ var analyzeReport = Report();
 var analyzeOffline = Offline();
 var analyzeCloud = Cloud(); var analyzeTarget = Target(); var analyzeServerless = Serverless();
 var analyzeLlm = Llm(); var analyzeLlmModel = LlmModel(); var analyzeLlmEndpoint = LlmEndpoint(); var analyzeLlmNoCache = LlmNoCache(); var analyzeLlmTimeout = LlmTimeout();
+var analyzeLlmClientId = LlmClientId(); var analyzeLlmClientSecret = LlmClientSecret(); var analyzeLlmTokenUrl = LlmTokenUrl(); var analyzeLlmScope = LlmScope();
 var analyzeNuGetConfig = NuGetConfig(); var analyzeNuGetSource = NuGetSource();
 var analyze = new Command("analyze", "Analisa a aplicação e gera o inventário de migração, as sugestões de modernização e a arquitetura alvo, sem gravar código.")
 {
-    analyzeInput, analyzeReport, analyzeOffline, analyzeCloud, analyzeTarget, analyzeServerless, analyzeNuGetConfig, analyzeNuGetSource, analyzeLlm, analyzeLlmModel, analyzeLlmEndpoint, analyzeLlmNoCache, analyzeLlmTimeout
+    analyzeInput, analyzeReport, analyzeOffline, analyzeCloud, analyzeTarget, analyzeServerless, analyzeNuGetConfig, analyzeNuGetSource, analyzeLlm, analyzeLlmModel, analyzeLlmEndpoint, analyzeLlmNoCache, analyzeLlmTimeout, analyzeLlmClientId, analyzeLlmClientSecret, analyzeLlmTokenUrl, analyzeLlmScope
 };
 analyze.SetAction((parse, ct) => RunCommand.ExecuteAsync(new Migrator.Core.Models.MigrationOptions
 {
@@ -68,7 +77,7 @@ analyze.SetAction((parse, ct) => RunCommand.ExecuteAsync(new Migrator.Core.Model
     Serverless = parse.GetValue(analyzeServerless),
     NuGetConfigPath = parse.GetValue(analyzeNuGetConfig),
     NuGetSourceUrl = parse.GetValue(analyzeNuGetSource),
-    Llm = BuildLlm(parse.GetValue(analyzeLlm), parse.GetValue(analyzeLlmModel), parse.GetValue(analyzeLlmEndpoint), 0, parse.GetValue(analyzeLlmNoCache), parse.GetValue(analyzeLlmTimeout)),
+    Llm = BuildLlm(parse.GetValue(analyzeLlm), parse.GetValue(analyzeLlmModel), parse.GetValue(analyzeLlmEndpoint), 0, parse.GetValue(analyzeLlmNoCache), parse.GetValue(analyzeLlmTimeout), parse.GetValue(analyzeLlmClientId), parse.GetValue(analyzeLlmClientSecret), parse.GetValue(analyzeLlmTokenUrl), parse.GetValue(analyzeLlmScope)),
     DryRun = true,
     VerifyBuild = false
 }, ct));
@@ -78,6 +87,7 @@ var migrateReport = Report();
 var migrateOffline = Offline();
 var migrateCloud = Cloud(); var migrateTarget = Target(); var migrateIac = Iac(); var migrateServerless = Serverless();
 var migrateLlm = Llm(); var migrateLlmModel = LlmModel(); var migrateLlmEndpoint = LlmEndpoint(); var migrateLlmRounds = LlmRounds(); var migrateLlmNoCache = LlmNoCache(); var migrateLlmTimeout = LlmTimeout();
+var migrateLlmClientId = LlmClientId(); var migrateLlmClientSecret = LlmClientSecret(); var migrateLlmTokenUrl = LlmTokenUrl(); var migrateLlmScope = LlmScope();
 var migrateNuGetConfig = NuGetConfig(); var migrateNuGetSource = NuGetSource();
 var output = new Option<string?>("--output", "-o") { Description = "Pasta de saída da aplicação migrada (padrão: <pasta-da-solução>.net481, ou .net10 com --target net10, ao lado da original)." };
 var force = new Option<bool>("--force") { Description = "Substitui uma saída gerada anteriormente pelo Migrator." };
@@ -91,7 +101,7 @@ var timeout = new Option<int>("--build-timeout") { Description = "Tempo máximo 
 var migrate = new Command("migrate", "Lift-and-shift (padrão): copia a aplicação sem alterar o código em .NET Framework 4.8.1, externaliza URLs/e-mails/senhas para configuração e Secrets Manager e gera a infra EC2 Windows em CloudFormation. Com --target net10, reescreve o código para .NET 10 (ECS Fargate), compila a saída e gera Dockerfiles.")
 {
     migrateInput, output, migrateReport, migrateOffline, migrateCloud, migrateTarget, migrateIac, migrateServerless, migrateNuGetConfig, migrateNuGetSource, force, noBuild, timeout, keepSecrets, noTests, noSmoke, verifyDocker, noInfra,
-    migrateLlm, migrateLlmModel, migrateLlmEndpoint, migrateLlmRounds, migrateLlmNoCache, migrateLlmTimeout
+    migrateLlm, migrateLlmModel, migrateLlmEndpoint, migrateLlmRounds, migrateLlmNoCache, migrateLlmTimeout, migrateLlmClientId, migrateLlmClientSecret, migrateLlmTokenUrl, migrateLlmScope
 };
 migrate.SetAction((parse, ct) => RunCommand.ExecuteAsync(new Migrator.Core.Models.MigrationOptions
 {
@@ -105,7 +115,7 @@ migrate.SetAction((parse, ct) => RunCommand.ExecuteAsync(new Migrator.Core.Model
     Serverless = parse.GetValue(migrateServerless),
     NuGetConfigPath = parse.GetValue(migrateNuGetConfig),
     NuGetSourceUrl = parse.GetValue(migrateNuGetSource),
-    Llm = BuildLlm(parse.GetValue(migrateLlm), parse.GetValue(migrateLlmModel), parse.GetValue(migrateLlmEndpoint), parse.GetValue(migrateLlmRounds), parse.GetValue(migrateLlmNoCache), parse.GetValue(migrateLlmTimeout)),
+    Llm = BuildLlm(parse.GetValue(migrateLlm), parse.GetValue(migrateLlmModel), parse.GetValue(migrateLlmEndpoint), parse.GetValue(migrateLlmRounds), parse.GetValue(migrateLlmNoCache), parse.GetValue(migrateLlmTimeout), parse.GetValue(migrateLlmClientId), parse.GetValue(migrateLlmClientSecret), parse.GetValue(migrateLlmTokenUrl), parse.GetValue(migrateLlmScope)),
     Force = parse.GetValue(force),
     KeepSecrets = parse.GetValue(keepSecrets),
     RunTests = !parse.GetValue(noTests),
@@ -119,11 +129,12 @@ migrate.SetAction((parse, ct) => RunCommand.ExecuteAsync(new Migrator.Core.Model
 var portfolioInput = new Argument<string>("pasta") { Description = "Pasta que contém as soluções (.sln/.slnx) ou projetos das aplicações; cada solução vira uma aplicação do portfólio." };
 var portfolioReport = Report(); var portfolioOffline = Offline(); var portfolioCloud = Cloud(); var portfolioTarget = Target(); var portfolioServerless = Serverless();
 var portfolioLlm = Llm(); var portfolioLlmModel = LlmModel(); var portfolioLlmEndpoint = LlmEndpoint(); var portfolioLlmNoCache = LlmNoCache(); var portfolioLlmTimeout = LlmTimeout();
+var portfolioLlmClientId = LlmClientId(); var portfolioLlmClientSecret = LlmClientSecret(); var portfolioLlmTokenUrl = LlmTokenUrl(); var portfolioLlmScope = LlmScope();
 var portfolioNuGetConfig = NuGetConfig(); var portfolioNuGetSource = NuGetSource();
 var baseline = new Option<string?>("--baseline") { Description = "portfolio.json de uma execução anterior para comparar a evolução (bloqueantes, atenção, impacto alto, esforço por aplicação)." };
 var portfolio = new Command("portfolio", "Analisa todas as aplicações de uma pasta e consolida: ranking de esforço, gaps mais frequentes, bancos/hosts compartilhados, ondas de migração e serviços AWS.")
 {
-    portfolioInput, portfolioReport, portfolioOffline, portfolioCloud, portfolioTarget, portfolioServerless, portfolioNuGetConfig, portfolioNuGetSource, baseline, portfolioLlm, portfolioLlmModel, portfolioLlmEndpoint, portfolioLlmNoCache, portfolioLlmTimeout
+    portfolioInput, portfolioReport, portfolioOffline, portfolioCloud, portfolioTarget, portfolioServerless, portfolioNuGetConfig, portfolioNuGetSource, baseline, portfolioLlm, portfolioLlmModel, portfolioLlmEndpoint, portfolioLlmNoCache, portfolioLlmTimeout, portfolioLlmClientId, portfolioLlmClientSecret, portfolioLlmTokenUrl, portfolioLlmScope
 };
 portfolio.SetAction((parse, ct) => PortfolioCommand.ExecuteAsync(new Migrator.Core.Portfolio.PortfolioOptions
 {
@@ -136,7 +147,7 @@ portfolio.SetAction((parse, ct) => PortfolioCommand.ExecuteAsync(new Migrator.Co
     BaselinePath = parse.GetValue(baseline),
     NuGetConfigPath = parse.GetValue(portfolioNuGetConfig),
     NuGetSourceUrl = parse.GetValue(portfolioNuGetSource),
-    Llm = BuildLlm(parse.GetValue(portfolioLlm), parse.GetValue(portfolioLlmModel), parse.GetValue(portfolioLlmEndpoint), 0, parse.GetValue(portfolioLlmNoCache), parse.GetValue(portfolioLlmTimeout))
+    Llm = BuildLlm(parse.GetValue(portfolioLlm), parse.GetValue(portfolioLlmModel), parse.GetValue(portfolioLlmEndpoint), 0, parse.GetValue(portfolioLlmNoCache), parse.GetValue(portfolioLlmTimeout), parse.GetValue(portfolioLlmClientId), parse.GetValue(portfolioLlmClientSecret), parse.GetValue(portfolioLlmTokenUrl), parse.GetValue(portfolioLlmScope))
 }, ct));
 
 var root = new RootCommand("Migrator — moderniza aplicações .NET Framework (MVC, Web API, console, Windows Service, bibliotecas) para .NET 10.")

@@ -21,9 +21,9 @@ public sealed record MigrationOptions
     /// inventory, secrets protection and architecture run in both.
     /// </summary>
     public MigrationTarget Target { get; init; } = MigrationTarget.NetFramework;
-    /// <summary>Infrastructure-as-code flavour. Null = Terraform for .NET 10, CloudFormation for the .NET Framework target.</summary>
+    /// <summary>Infrastructure-as-code flavour. Null = CloudFormation (the platform's YAML layout) for both targets; Terraform is opt-in.</summary>
     public IacTool? Iac { get; init; }
-    public IacTool EffectiveIac => Iac ?? (Target == MigrationTarget.NetFramework ? IacTool.CloudFormation : IacTool.Terraform);
+    public IacTool EffectiveIac => Iac ?? IacTool.CloudFormation;
     public bool KeepsFramework => Target == MigrationTarget.NetFramework;
     /// <summary>
     /// Opt in to AWS Lambda for event-driven automations (requires rewriting the entry point as a handler). Off by default:
@@ -98,6 +98,8 @@ public sealed class SolutionResult
     public required string RootDir { get; init; }
     public string SolutionName { get; set; } = string.Empty;
     public string? OutputDir { get; set; }
+    /// <summary>Where the migrated solution is written inside the output: &lt;OutputDir&gt;/app/src, the platform repository layout (infra/, tests/, .github/ and .iupipes.yml stay at the root).</summary>
+    public string? SourceDir { get; set; }
     public string? ReportDir { get; set; }
     public List<ProjectResult> Projects { get; } = [];
     public List<InventoryItem> GlobalItems { get; } = [];

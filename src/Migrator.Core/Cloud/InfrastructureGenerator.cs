@@ -223,7 +223,7 @@ public static partial class InfrastructureGenerator
             sb.AppendLine("  description = \"Caminho do .zip de cada função (saída de 'dotnet lambda package').\"");
             sb.AppendLine("  type        = map(string)");
             sb.AppendLine("  default = {");
-            foreach (var l in lambdas) sb.AppendLine($"    {l.Id} = \"../../{l.Result.RelativeDir.Replace('\\', '/')}/bin/Release/net10.0/{l.Result.Project.AssemblyName}.zip\"");
+            foreach (var l in lambdas) sb.AppendLine($"    {l.Id} = \"../../{CloudFormationGenerator.SourceDir}/{l.Result.RelativeDir.Replace('\\', '/')}/bin/Release/net10.0/{l.Result.Project.AssemblyName}.zip\"");
             sb.AppendLine("  }");
             sb.AppendLine("}");
             if (lambdas.Any(l => l.Profile.Has(Signal.MailboxReading)))
@@ -1342,9 +1342,9 @@ public static partial class InfrastructureGenerator
         sb.AppendLine("      - uses: actions/setup-dotnet@v4");
         sb.AppendLine("        with:");
         sb.AppendLine("          dotnet-version: ${{ env.DOTNET_VERSION }}");
-        sb.AppendLine("      - run: dotnet restore");
-        sb.AppendLine("      - run: dotnet build --no-restore -c Release");
-        sb.AppendLine("      - run: dotnet test --no-build -c Release");
+        sb.AppendLine("      - run: dotnet restore " + CloudFormationGenerator.SourceDir);
+        sb.AppendLine("      - run: dotnet build " + CloudFormationGenerator.SourceDir + " --no-restore -c Release");
+        sb.AppendLine("      - run: dotnet test " + CloudFormationGenerator.SourceDir + " --no-build -c Release");
         if (containers.Count > 0)
         {
             sb.AppendLine();
@@ -1358,7 +1358,7 @@ public static partial class InfrastructureGenerator
             foreach (var c in containers)
             {
                 sb.AppendLine($"          - name: {c.Slug}");
-                sb.AppendLine($"            dockerfile: {c.Result.RelativeDir.Replace('\\', '/')}/Dockerfile");
+                sb.AppendLine($"            dockerfile: {CloudFormationGenerator.SourceDir}/{c.Result.RelativeDir.Replace('\\', '/')}/Dockerfile");
                 sb.AppendLine($"            service: {c.Slug}");
                 sb.AppendLine($"            kind: {(c.Result.Project.Kind == ProjectKind.Web || c.Result.Hosting!.Primary == AwsHosting.EcsFargateWorker || c.Result.Hosting.Primary == AwsHosting.EcsWindows ? "service" : "task")}");
             }
@@ -1373,7 +1373,7 @@ public static partial class InfrastructureGenerator
             sb.AppendLine("      - name: Build e push");
             sb.AppendLine("        run: |");
             sb.AppendLine("          IMAGE=${{ steps.ecr.outputs.registry }}/${{ env.APP_NAME }}/${{ matrix.name }}");
-            sb.AppendLine("          docker build -f ${{ matrix.dockerfile }} -t $IMAGE:${{ github.sha }} -t $IMAGE:latest .");
+            sb.AppendLine("          docker build -f ${{ matrix.dockerfile }} -t $IMAGE:${{ github.sha }} -t $IMAGE:latest " + CloudFormationGenerator.SourceDir);
             sb.AppendLine("          docker push $IMAGE --all-tags");
             sb.AppendLine("      - name: Deploy no ECS");
             sb.AppendLine("        if: matrix.kind == 'service'");
@@ -1396,7 +1396,7 @@ public static partial class InfrastructureGenerator
             foreach (var l in lambdas)
             {
                 sb.AppendLine($"          - name: {l.Slug}");
-                sb.AppendLine($"            project: {l.Result.OutputProjectPath!.Replace('\\', '/')}");
+                sb.AppendLine($"            project: {CloudFormationGenerator.SourceDir}/{l.Result.OutputProjectPath!.Replace('\\', '/')}");
             }
             sb.AppendLine("    steps:");
             sb.AppendLine("      - uses: actions/checkout@v4");

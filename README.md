@@ -441,6 +441,17 @@ Comportamento em falha: se o servidor/modelo não responder, a ferramenta regist
 
 Respostas são **cacheadas** em `~/.migrator/llm-cache` (chave = provedor + modelo + prompts), então rodar de novo dá o mesmo resultado sem chamar o modelo; `--llm-no-cache` desliga. O provedor Ollama é chamado com temperatura 0 e seed fixa pelo mesmo motivo.
 
+### Corporativa, via API (`--llm api`)
+
+Para a LLM do banco, que fica atrás de um gateway HTTP com OAuth2 *client credentials*, o scaffold já está pronto em `Llm/CorporateApiAssistant.cs`: a URL do chat e o endpoint de token são constantes no código (`DefaultEndpoint`, `DefaultTokenUrl`: troque pelos do gateway), o modelo é opcional (`--llm-model` ou `MIGRATOR_LLM_MODEL`) e só o `client_id` e o `client_secret` precisam ser informados:
+
+```powershell
+$env:MIGRATOR_LLM_CLIENT_ID = "..."; $env:MIGRATOR_LLM_CLIENT_SECRET = "..."
+migrator migrate C:\src\MinhaApp\MinhaApp.sln --llm api --llm-model gpt-4o
+```
+
+O token é obtido uma vez (form `grant_type=client_credentials`, credenciais no corpo; `ClientCredentialsInBody = false` troca para Basic Auth) e reaproveitado até expirar; sem endpoint de token, o `client_secret` vai como Bearer fixo (gateways de API key). O corpo da chamada é o de *chat completions* compatível com OpenAI (`messages` system/user, `temperature 0`) e a resposta é lida nas formas comuns (`choices[0].message.content`, `content[0].text`, `output.message.content[0].text`, `text`/`response`/`result`). Se o gateway tiver outro contrato, os dois pontos a ajustar são `BuildRequest` e `ExtractText`; headers extras (x-api-key, correlation id) entram em `CorporateApiSettings.ExtraHeaders`. O cache de respostas e o restante do pipeline (correção do build, rascunhos, triagem, resumo executivo) funcionam igual aos outros provedores.
+
 ### Local, com Ollama
 
 ```powershell
@@ -595,23 +606,32 @@ Princípios: um template por aplicação, parametrizado por variáveis (`terrafo
 
 O código gerado para o sample passa em `terraform fmt -check`, `terraform init` e `terraform validate` (provider AWS 6.x). Projetos não convertidos (VB.NET) e os recomendados para EC2 Windows não geram recursos; o README da infra diz por quê. `--no-infra` desliga a geração.
 
-**CloudFormation** (`--iac cloudformation`, padrão para o destino framework), em `Cloud/CloudFormationGenerator`, segue o layout da plataforma do portfólio: um template por serviço, com a infraestrutura compartilhada (VPC, subnets, cluster, roles, listener do ALB) chegando como parâmetros, e uma pasta por ambiente:
+**CloudFormation** (`--iac cloudformation`, o padrão nos dois destinos; Terraform é `--iac terraform`), em `Cloud/CloudFormationGenerator`, reproduz o repositório padrão da plataforma do portfólio. A saída inteira segue esse layout:
 
 ```
+app/src/                          a solução migrada (.sln/.slnx, projetos, nuget.config, Dockerfiles); é o working-directory da esteira
 infra/service.yml                 1º projeto publicável; os demais em service-<microservico>.yml
-                                  framework: launch template (user data instala IIS/.NET 4.8.1/CodeDeploy/CloudWatch agent),
-                                             Auto Scaling group, target group + regra no ALB compartilhado, CodeDeploy, Parameter Store,
-                                             log group, filtro de métrica e alarmes
-                                  net10:     log group, filtro/alarme, security group, task definition (Fargate, ARM64), service,
-                                             auto scaling; tarefa agendada (Scheduler) ou worker com SQS conforme a hospedagem
+                                  net10:     o service.yml da plataforma: parâmetros de tags (Squad, Finalidade, Sigla, Versao, TechTeamEmail,
+                                             OwnerTeamEmail, RepoUrl, GithubRepoId, NomeAplicacao), roles e NLB via SSM
+                                             (/Itau/Parameters/Common/*), listener TCP por serviço no NLB compartilhado, task definition
+                                             Fargate ARM64 com sidecars datadog-agent e log_router (FireLens; EnableDatadog=false volta ao
+                                             awslogs), health check curl, tags iu:finops:alocacao:* no task def e no service, ScalableTarget
+                                             com /Shared/Role/ecs-scaling-role; imagem ${DevToolsAccount}.dkr.ecr.<região>/<feature>-<micro>-<env>
+                                  framework: launch template (user data instala IIS/.NET 4.8.1/CodeDeploy/CloudWatch agent), Auto Scaling group,
+                                             target group + regra no ALB compartilhado, CodeDeploy, Parameter Store, log group e alarmes
 infra/lambda-<microservico>.yml   só com --serverless: função, DLQ, gatilhos (fila de eventos do S3, agendamento da caixa postal, SES opcional)
 infra/data.yml                    o que é da aplicação: RDS, bucket S3 (+ fila de eventos), filas dos workers, FSx for Windows (framework + pastas UNC),
                                   bucket de artefatos do CodeDeploy (framework), nomes dos segredos; exportado para os serviços
-infra/{dev,hom,prod}/parameters*.json   {"Parameters": {...}} por template e ambiente: VPC, subnets, roles, tamanhos, hosts e os
-                                  parâmetros de aplicação (URLs/e-mails) com o valor de cada ambiente; nada é segredo
+infra/{dev,hom,prod}/parameters*.json   {"Parameters": {...}} por template e ambiente: VPC, subnets, tamanhos, tags e os parâmetros de
+                                  aplicação (URLs/e-mails) com o valor de cada ambiente; nada é segredo
 infra/deploy.sh / deploy.ps1      aws cloudformation deploy na ordem (data → serviços → lambdas) com a pasta do ambiente
 infra/codedeploy/<microservico>/  (framework) appspec.yml + before-install / after-install / application-start / validate-service.ps1
+tests/testspec-dev.yml, -hom.yml  specs dos testes de aceitação (TAAC) da esteira, idênticos (buildspec 0.2 com echo; comentário diz como automatizar)
+.iupipes.yml                      descritor da esteira: language, build (working-directory ./app/src, docker-platform linux/arm64), unit-tests,
+                                  publish, infra.cloudformation (template-file-path service.yml, working-directory infra), contas por ambiente,
+                                  sonar, fortify. Contas, sigla e e-mails ficam como placeholders para preencher
 .github/workflows/deploy.yml      framework: MSBuild em runner Windows → zip → CodeDeploy;  net10: buildx linux/arm64 → ECR → update-service
+.gitattributes, .gitignore, README.md, _secrets/ (fora do git), _migration-report/
 ```
 
 Convenções do template: `FeatureName` (solução, só letras) e `MicroServiceName` (projeto sem o prefixo da solução, só letras) com `AllowedPattern "[a-z]*"`, `DevToolsAccount`, `Projeto`/`Negocio`, `Environment` (dev/hom/prod), `EcsClusterName` padrão `ecs-cluster-<feature>-fargate`, alarmes no tópico `{{resolve:ssm:/org/member/workload_local_sns_arn:1}}`. Os templates gerados para o sample (nos dois destinos) passam limpos no `cfn-lint`; revalide com ele após mudar o gerador.
@@ -798,9 +818,10 @@ migrator migrate <entrada> [--output <pasta>] [--report <pasta>] [--offline] [--
 | `--cloud` | ambos | Nuvem de destino da proposta de arquitetura e dos Dockerfiles: `aws` (padrão) ou `none` |
 | `--target` | todos | `framework` (padrão: lift-and-shift, código intocado em .NET Framework 4.8.1, EC2 Windows) ou `net10` (reescreve o código, ECS Fargate); veja [Destino .NET Framework 4.8.1](#destino-net-framework-481-o-padrão-sem-migrar-o-código) |
 | `--serverless` | todos | Recomenda Lambda (e gera handler/gatilhos) para automações orientadas a evento; sem a opção elas ficam em tarefa ECS agendada com o `Main()` intacto |
-| `--iac` | migrate | `cloudformation` (padrão para `framework`; layout `infra/service.yml` + `infra/<env>/parameters.json`) ou `terraform` (padrão para `net10`) |
-| `--llm` | ambos | Assistência por LLM: `none` (padrão) ou `ollama`; veja [Assistência por LLM](#assistência-por-llm-opcional) |
-| `--llm-model`, `--llm-endpoint` | ambos | Modelo e endpoint do provedor |
+| `--iac` | migrate | `cloudformation` (padrão nos dois destinos; layout da plataforma, `infra/service.yml` + `infra/<env>/parameters.json`) ou `terraform` |
+| `--llm` | ambos | Assistência por LLM: `none` (padrão), `ollama` (local) ou `api` (LLM corporativa via API, OAuth2 client credentials); veja [Assistência por LLM](#assistência-por-llm-opcional) |
+| `--llm-model`, `--llm-endpoint` | ambos | Modelo e endpoint do provedor (no `api` a URL é fixa no código; `--llm-endpoint` só sobrepõe para testes) |
+| `--llm-client-id`, `--llm-client-secret`, `--llm-token-url`, `--llm-scope` | ambos | Provedor `api`: credenciais OAuth2 (ou `MIGRATOR_LLM_CLIENT_ID`/`MIGRATOR_LLM_CLIENT_SECRET`), endpoint de token e escopo opcionais |
 | `--llm-rounds` | migrate | Rodadas build → correção → build (padrão 3) |
 | `--llm-timeout` | ambos | Tempo máximo de cada chamada à LLM, em minutos (padrão 6) |
 | `--llm-no-cache` | ambos | Desliga o cache de respostas |

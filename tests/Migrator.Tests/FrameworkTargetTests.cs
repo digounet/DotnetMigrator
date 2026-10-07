@@ -10,6 +10,11 @@ public sealed class FrameworkTargetTests : IDisposable
 
     public void Dispose() => Directory.Delete(_work, recursive: true);
 
+
+    private static string Resolve(string output, string relative) =>
+        Migrator.Core.Migration.MigrationEngine.IsRepositoryRootPath(relative) || relative.StartsWith("_migration-report", StringComparison.Ordinal) || relative is ".gitignore" or ".gitattributes" or "README.md" or ".migrator-output"
+            ? Path.Combine(output, relative) : Path.Combine(output, "app", "src", relative);
+
     private static string SampleSolution()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
@@ -48,8 +53,8 @@ public sealed class FrameworkTargetTests : IDisposable
         var output = Path.Combine(_work, "LegacyShop.net481");
         var result = await new MigrationEngine().RunAsync(new MigrationOptions { InputPath = SampleSolution(), OutputDir = output, Offline = true, VerifyBuild = true, Target = MigrationTarget.NetFramework, Serverless = true // the build is skipped on purpose for this target
         });
-        string Read(string relative) => File.ReadAllText(Path.Combine(output, relative));
-        bool Exists(string relative) => File.Exists(Path.Combine(output, relative));
+        string Read(string relative) => File.ReadAllText(Resolve(output, relative));
+        bool Exists(string relative) => File.Exists(Resolve(output, relative));
 
         // Code untouched, framework raised, original project/solution format kept (VB included).
         Assert.True(Exists("LegacyShop.sln"));
@@ -157,6 +162,9 @@ public sealed class FrameworkTargetTests : IDisposable
         Assert.Contains("microsoft/setup-msbuild@v2", workflow);
         Assert.Contains("aws deploy create-deployment", workflow);
         Assert.Contains("file://$ENV/$parameters", Read("infra/deploy.sh"));
+        Assert.Contains("language: \"dotnet-framework\"", Read(".iupipes.yml"));
+        Assert.True(Exists("tests/testspec-hom.yml"));
+        Assert.True(File.Exists(Path.Combine(output, "app", "src", "LegacyShop.sln")));
         Assert.Contains(result.GlobalItems, i => i.RuleId == "AWS-INFRA" && i.Title.Contains("CloudFormation"));
 
         // Code: fixed URL/e-mail/credentials left AppConfig.cs for the config (and the secrets plan); const became static readonly.
@@ -188,18 +196,29 @@ public sealed class FrameworkTargetTests : IDisposable
         var output = Path.Combine(_work, "LegacyShop.net10");
         var result = await new MigrationEngine().RunAsync(new MigrationOptions { Target = MigrationTarget.Net10, InputPath = SampleSolution(), OutputDir = output, Offline = true, VerifyBuild = false, Iac = IacTool.CloudFormation, Serverless = true
         });
-        string Read(string relative) => File.ReadAllText(Path.Combine(output, relative));
+        string Read(string relative) => File.ReadAllText(Resolve(output, relative));
 
         Assert.False(Directory.Exists(Path.Combine(output, "infra", "terraform")));
         Assert.False(Directory.Exists(Path.Combine(output, "infra", "codedeploy")));
         foreach (var file in new[] { "service.yml", "service-worker.yml", "lambda-importador.yml", "data.yml", "dev/parameters.json", "hom/parameters-worker.json", "prod/parameters-lambda-importador.json", "prod/parameters-data.json" })
             Assert.True(File.Exists(Path.Combine(output, "infra", file)), file);
         var service = Read("infra/service.yml");
-        Assert.Contains("ECSService:", service);                                              // web → ECS service behind the shared ALB
+        Assert.Contains("ECSService:", service);                                              // web → ECS service on the shared NLB (TCP listener per service)
         Assert.Contains("EcsClusterName:", service);
+        Assert.Contains("Type: AWS::ElasticLoadBalancingV2::Listener", service);
+        Assert.Contains("LoadBalancerArn:", service);
+        Assert.Contains("Name: datadog-agent", service);                                      // platform sidecars, switchable with EnableDatadog
+        Assert.Contains("Name: log_router", service);
+        Assert.Contains("iu:finops:alocacao:projeto", service);
+        Assert.Contains("ServiceName: !Sub service-${FeatureName}-${MicroServiceName}", service);
+        Assert.Contains("${DevToolsAccount}.dkr.ecr.${AWS::Region}.amazonaws.com/${FeatureName}-${MicroServiceName}-${Environment}", service);
         Assert.Contains("CpuArchitecture: !Ref CpuArchitecture", service);
+        Assert.Contains("language: \"dotnet-core\"", Read(".iupipes.yml"));
+        Assert.Contains("docker-platform: 'linux/arm64'", Read(".iupipes.yml"));
+        Assert.Equal(Read("tests/testspec-dev.yml"), Read("tests/testspec-hom.yml"));
+        Assert.Contains("echo 'Testes executados manualmente'", Read("tests/testspec-dev.yml"));
         Assert.Contains("ValueFrom: !Sub \"arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:legacyshop/legacyshop.web/ConnectionStrings/RelatoriosConnection\"", service);
-        Assert.Contains("- Name: AppSettings__Urls__ErpProtocoloUrl", service);               // externalized URL → environment variable from a stack parameter
+        Assert.Contains("- Name: \"AppSettings__Urls__ErpProtocoloUrl\"", service);               // externalized URL → environment variable from a stack parameter
         Assert.DoesNotContain("Senha@123", service);
         Assert.Contains("AWS::Scheduler::Schedule", Read("infra/service-worker.yml"));         // worker → scheduled task, Main() untouched
         Assert.False(File.Exists(Path.Combine(output, "infra", "service-relatorios.yml")));   // VB project is not converted

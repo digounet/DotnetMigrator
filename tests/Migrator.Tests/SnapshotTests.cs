@@ -47,13 +47,13 @@ public sealed class SnapshotTests : IDisposable
         var snapshots = Path.Combine(root, "tests", "Migrator.Tests", "Snapshots");
         var update = Environment.GetEnvironmentVariable("MIGRATOR_UPDATE_SNAPSHOTS") == "1";
         var output = Path.Combine(_work, "out");
-        await new MigrationEngine().RunAsync(new MigrationOptions { Target = MigrationTarget.Net10, InputPath = Path.Combine(root, "samples", "LegacyShop", "LegacyShop.sln"), OutputDir = output, Offline = true, VerifyBuild = false, Serverless = true
+        await new MigrationEngine().RunAsync(new MigrationOptions { Target = MigrationTarget.Net10, InputPath = Path.Combine(root, "samples", "LegacyShop", "LegacyShop.sln"), OutputDir = output, Offline = true, VerifyBuild = false, Serverless = true, Iac = IacTool.Terraform
         });
 
         var differences = new List<string>();
         foreach (var relative in Files)
         {
-            var actualPath = Path.Combine(output, relative);
+            var actualPath = Migrator.Core.Migration.MigrationEngine.IsRepositoryRootPath(relative) ? Path.Combine(output, relative) : Path.Combine(output, "app", "src", relative);
             Assert.True(File.Exists(actualPath), $"arquivo não gerado: {relative}");
             var actual = Normalize(await File.ReadAllTextAsync(actualPath));
             var snapshotPath = Path.Combine(snapshots, relative.Replace('/', '_') + ".snap");

@@ -21,7 +21,7 @@ public sealed class IacGenerationTests : IDisposable
     public async Task Migrate_writes_terraform_and_workflow_from_the_architecture()
     {
         var output = Path.Combine(_work, "out");
-        var result = await new MigrationEngine().RunAsync(new MigrationOptions { Target = MigrationTarget.Net10, InputPath = SampleSolution(), OutputDir = output, Offline = true, VerifyBuild = false, Serverless = true });
+        var result = await new MigrationEngine().RunAsync(new MigrationOptions { Target = MigrationTarget.Net10, InputPath = SampleSolution(), OutputDir = output, Offline = true, VerifyBuild = false, Serverless = true, Iac = IacTool.Terraform });
         string Read(string relative) => File.ReadAllText(Path.Combine(output, relative));
 
         Assert.Contains(result.GlobalItems, i => i.RuleId == "AWS-INFRA" && i.AutoMigrated);
@@ -63,7 +63,7 @@ public sealed class IacGenerationTests : IDisposable
 
         var workflow = Read(".github/workflows/deploy.yml");
         Assert.Contains("aws-actions/amazon-ecr-login@v2", workflow);
-        Assert.Contains("dockerfile: LegacyShop.Web/Dockerfile", workflow);
+        Assert.Contains("dockerfile: app/src/LegacyShop.Web/Dockerfile", workflow);
         Assert.Contains("dotnet lambda deploy-function", workflow);
         Assert.Contains("role-to-assume: ${{ secrets.AWS_ROLE_ARN }}", workflow);
     }

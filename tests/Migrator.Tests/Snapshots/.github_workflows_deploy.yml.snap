@@ -25,9 +25,9 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
-      - run: dotnet restore
-      - run: dotnet build --no-restore -c Release
-      - run: dotnet test --no-build -c Release
+      - run: dotnet restore app/src
+      - run: dotnet build app/src --no-restore -c Release
+      - run: dotnet test app/src --no-build -c Release
 
   containers:
     needs: build-test
@@ -37,11 +37,11 @@ jobs:
       matrix:
         include:
           - name: legacyshop-web
-            dockerfile: LegacyShop.Web/Dockerfile
+            dockerfile: app/src/LegacyShop.Web/Dockerfile
             service: legacyshop-web
             kind: service
           - name: legacyshop-worker
-            dockerfile: LegacyShop.Worker/Dockerfile
+            dockerfile: app/src/LegacyShop.Worker/Dockerfile
             service: legacyshop-worker
             kind: task
     steps:
@@ -55,7 +55,7 @@ jobs:
       - name: Build e push
         run: |
           IMAGE=${{ steps.ecr.outputs.registry }}/${{ env.APP_NAME }}/${{ matrix.name }}
-          docker build -f ${{ matrix.dockerfile }} -t $IMAGE:${{ github.sha }} -t $IMAGE:latest .
+          docker build -f ${{ matrix.dockerfile }} -t $IMAGE:${{ github.sha }} -t $IMAGE:latest app/src
           docker push $IMAGE --all-tags
       - name: Deploy no ECS
         if: matrix.kind == 'service'
@@ -73,7 +73,7 @@ jobs:
       matrix:
         include:
           - name: legacyshop-importador
-            project: LegacyShop.Importador/LegacyShop.Importador.csproj
+            project: app/src/LegacyShop.Importador/LegacyShop.Importador.csproj
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4

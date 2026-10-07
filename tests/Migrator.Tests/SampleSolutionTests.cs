@@ -10,6 +10,11 @@ public sealed class SampleSolutionTests : IDisposable
 
     public void Dispose() => Directory.Delete(_work, recursive: true);
 
+
+    private static string Resolve(string output, string relative) =>
+        Migrator.Core.Migration.MigrationEngine.IsRepositoryRootPath(relative) || relative.StartsWith("_migration-report", StringComparison.Ordinal) || relative is ".gitignore" or ".gitattributes" or "README.md" or ".migrator-output"
+            ? Path.Combine(output, relative) : Path.Combine(output, "app", "src", relative);
+
     private static string SampleSolution()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
@@ -153,11 +158,11 @@ public sealed class SampleSolutionTests : IDisposable
     {
         var output = Path.Combine(_work, "LegacyShop.net10");
 
-        var result = await new MigrationEngine().RunAsync(new MigrationOptions { Target = MigrationTarget.Net10, InputPath = SampleSolution(), OutputDir = output, Offline = true, VerifyBuild = false, Serverless = true
+        var result = await new MigrationEngine().RunAsync(new MigrationOptions { Target = MigrationTarget.Net10, InputPath = SampleSolution(), OutputDir = output, Offline = true, VerifyBuild = false, Serverless = true, Iac = IacTool.Terraform
         });
 
-        string Read(string relative) => File.ReadAllText(Path.Combine(output, relative));
-        bool Exists(string relative) => File.Exists(Path.Combine(output, relative));
+        string Read(string relative) => File.ReadAllText(Resolve(output, relative));
+        bool Exists(string relative) => File.Exists(Resolve(output, relative));
 
         Assert.True(Exists("LegacyShop.slnx"));
         Assert.True(Exists(".migrator-output"));
@@ -208,6 +213,11 @@ public sealed class SampleSolutionTests : IDisposable
         Assert.Contains(result.Projects[0].Inventory, i => i.RuleId == "CS-SECRET-EXTERNALIZED");
         Assert.Contains("app_settings", Read("infra/terraform/variables.tf"));
         Assert.Contains("AppSettings__Urls__ErpProtocoloUrl", Read("infra/terraform/variables.tf"));
+        Assert.True(Exists(".iupipes.yml"));                       // platform repository layout: app/src + infra + tests + pipeline descriptor
+        Assert.True(Exists("tests/testspec-dev.yml"));
+        Assert.True(Exists(".gitattributes"));
+        Assert.True(File.Exists(Path.Combine(output, "app", "src", "LegacyShop.slnx")));
+        Assert.False(File.Exists(Path.Combine(output, "LegacyShop.slnx")));
 
         var core = Read("LegacyShop.Core/LegacyShop.Core.csproj");
         Assert.Contains("<Compile Include=\"..\\Shared\\VersaoInfo.cs\" Link=\"Properties\\VersaoInfo.cs\" />", core);

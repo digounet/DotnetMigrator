@@ -17,6 +17,8 @@ namespace Migrator.Core.Cloud;
 public static partial class CloudFormationGenerator
 {
     public const string InfraDir = "infra";
+    /// <summary>Where the migrated solution lives in the repository (the platform pipeline's working-directory).</summary>
+    public const string SourceDir = "app/src";
     public const string CodeDeployDir = "infra/codedeploy";
 
     /// <summary>Deployment environments the parameter folders are generated for.</summary>
@@ -89,7 +91,90 @@ public static partial class CloudFormationGenerator
                     files[$"{CodeDeployDir}/{Micro(result, d)}/{path}"] = content;
         files[$"{InfraDir}/README.md"] = Readme(result, feature, services, lambdas, notGenerated, hasData, templates, framework, components);
         files[".github/workflows/deploy.yml"] = framework ? WorkflowWindows(result, feature, deployables) : ServiceWorkflow(result, feature, services, lambdas);
+        foreach (var (path, content) in PlatformFiles(result, profiles)) files[path] = content;
         return files;
+    }
+
+    // ------------------------------------------------------------------ pipeline descriptor and test specs
+
+    /// <summary>Repository files the platform expects regardless of the IaC tool: `.iupipes.yml` and the TAAC specs (two identical buildspecs, dev and hom).</summary>
+    public static Dictionary<string, string> PlatformFiles(SolutionResult result, IReadOnlyList<(ProjectResult Result, ApplicationProfile Profile)> profiles)
+    {
+        var files = new Dictionary<string, string>(StringComparer.Ordinal);
+        var framework = result.Options.KeepsFramework;
+        var deployables = profiles
+            .Where(p => p.Result.Hosting is { Primary: not (AwsHosting.NotDeployable or AwsHosting.Desktop) } && p.Result.OutputProjectPath != null)
+            .Select(p => new Deployable(p.Result, p.Profile, Slug(p.Result.Project.Name), Id(p.Result.Project.Name), Logical(p.Result.Project.Name)))
+            .ToList();
+        files[".iupipes.yml"] = Iupipes(result, Feature(result), deployables, framework);
+        foreach (var environment in new[] { "dev", "hom" }) files[$"tests/testspec-{environment}.yml"] = TestSpec(result, framework);
+        return files;
+    }
+
+    /// <summary>`.iupipes.yml`: what the platform's pipeline reads (language, build, unit tests, publish, CloudFormation template, accounts, Sonar, Fortify).</summary>
+    private static string Iupipes(SolutionResult result, string feature, List<Deployable> deployables, bool framework)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("project:");
+        sb.AppendLine($"  language: \"{(framework ? "dotnet-framework" : "dotnet-core")}\"{(framework ? " # confirme com a plataforma o valor para .NET Framework (lift-and-shift em EC2)" : "")}");
+        sb.AppendLine("build:");
+        sb.AppendLine($"  nuget-config-path: \"./{SourceDir}\"");
+        sb.AppendLine("  parameters: \"/p:PublishWithAspNetCoreTargetManifest=false /p:RunCodeAnalysis=false\"");
+        sb.AppendLine("  restore-parameters: \"\"");
+        sb.AppendLine($"  version: \"{(framework ? "4.8.1" : "10.0")}\"");
+        sb.AppendLine($"  working-directory: \"./{SourceDir}\"");
+        if (!framework) sb.AppendLine("  docker-platform: 'linux/arm64'");
+        sb.AppendLine("unit-tests:");
+        sb.AppendLine("  directory: \".\"");
+        sb.AppendLine("publish:");
+        sb.AppendLine("  deploy-only: \"\"");
+        sb.AppendLine("  output-dir: \".\"");
+        sb.AppendLine("  parameters: \"\"");
+        sb.AppendLine("infra:");
+        sb.AppendLine("  cloudformation:");
+        sb.AppendLine("    aws-owner-contact-email: 'po@empresa.com.br'");
+        sb.AppendLine("    aws-tech-team-email: 'time@empresa.com.br'");
+        sb.AppendLine("    destroy-dev: \"true\"");
+        sb.AppendLine("    destroy-hom: \"true\"");
+        sb.AppendLine("    destroy-prod: \"true\"");
+        sb.AppendLine("    template-file-path: \"service.yml\"");
+        sb.AppendLine("    working-directory: \"infra\"");
+        sb.AppendLine("deploy:");
+        sb.AppendLine("  aws:");
+        foreach (var environment in Environments)
+        {
+            sb.AppendLine($"    {environment}:");
+            sb.AppendLine("      account: \"123456789012\"");
+        }
+        sb.AppendLine("quality:");
+        sb.AppendLine("  sonar:");
+        sb.AppendLine("    gate-name: ''");
+        sb.AppendLine($"    language: '{(framework ? "dotnet-framework" : "dotnet-core")}'");
+        sb.AppendLine($"    nugetConfigPath: './{SourceDir}'");
+        sb.AppendLine("    parameters: ''");
+        sb.AppendLine($"    working-directory: './{SourceDir}'");
+        sb.AppendLine("security:");
+        sb.AppendLine("  fortify:");
+        sb.AppendLine("    environment-analyse: \"pipelinescan\"");
+        sb.AppendLine($"    nome-aws: \"{(deployables.Count > 0 ? Micro(result, deployables[0]) : feature)}\"");
+        sb.AppendLine($"    produto-aws: \"{feature}\"");
+        sb.AppendLine("    sigla: \"SIGLA\"");
+        sb.AppendLine("    sigla-app: \"SIGLA-APP\"");
+        return Yaml(sb);
+    }
+
+    /// <summary>TAAC spec (CodeBuild buildspec 0.2) the pipeline runs after the deploy; identical for dev and hom as in the platform repos.</summary>
+    private static string TestSpec(SolutionResult result, bool framework)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("version: 0.2");
+        sb.AppendLine();
+        sb.AppendLine("phases:");
+        sb.AppendLine("  build:");
+        sb.AppendLine("    commands:");
+        sb.AppendLine("      - echo 'Testes executados manualmente'");
+        sb.AppendLine($"      # Para automatizar: {(framework ? "smoke test da URL publicada (curl -f https://<host>/) e os testes do projeto " + string.Join(", ", result.Projects.Where(p => p.Project.Kind == ProjectKind.Test).Select(p => p.Project.Name).DefaultIfEmpty("de testes")) + " via vstest" : "dotnet test " + SourceDir + " e um smoke test da URL publicada (curl -f https://<host>/health)")}");
+        return Yaml(sb);
     }
 
     // ------------------------------------------------------------------ naming

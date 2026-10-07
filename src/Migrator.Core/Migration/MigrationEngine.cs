@@ -31,6 +31,8 @@ public sealed class MigrationEngine
         {
             result.OutputDir = Path.GetFullPath(options.OutputDir ?? Path.Combine(parent, workspace.Name + (options.KeepsFramework ? ".net481" : ".net10")));
             PrepareOutputDirectory(result.OutputDir, workspace.RootDir, options.Force);
+            // Repository layout of the platform: the solution under app/src, infra/ tests/ .github/ and the pipeline descriptor at the root.
+            result.SourceDir = Path.Combine(result.OutputDir, CloudFormationGenerator.SourceDir.Replace('/', Path.DirectorySeparatorChar));
         }
         result.ReportDir = Path.GetFullPath(options.ReportDir ??
             (options.DryRun ? Path.Combine(parent, workspace.Name + ".migration-report") : Path.Combine(result.OutputDir!, "_migration-report")));
@@ -125,6 +127,7 @@ public sealed class MigrationEngine
             var cloudFormation = options.EffectiveIac == IacTool.CloudFormation;
             progress?.Report($"Gerando infraestrutura como código ({options.EffectiveIac.Display()}) e pipeline...");
             var files = cloudFormation ? CloudFormationGenerator.Generate(result, profiles) : InfrastructureGenerator.Generate(result, profiles);
+            if (!cloudFormation) foreach (var (path, content) in CloudFormationGenerator.PlatformFiles(result, profiles)) files[path] = content; // pipeline descriptor + TAAC specs come with any IaC
             var carrier = migrated.FirstOrDefault(m => m.Result.OutputProjectPath != null);
             if (files.Count > 0 && carrier != null)
             {
@@ -151,15 +154,16 @@ public sealed class MigrationEngine
 
         if (!options.DryRun)
         {
-            foreach (var project in migrated) await ApplyAsync(project.Plan, result.OutputDir!);
+            foreach (var project in migrated) await ApplyAsync(project.Plan, result.OutputDir!, result.SourceDir!);
             WriteSolution(result, workspace);
-            CopyRootFiles(workspace.RootDir, result.OutputDir!, result);
+            CopyRootFiles(workspace.RootDir, result.SourceDir!, result);
             WriteNuGetConfig(nugetConfig, nugetSource, result);
             WriteRootGitIgnore(result.OutputDir!);
+            WriteRootFiles(result.OutputDir!);
             await File.WriteAllTextAsync(Path.Combine(result.OutputDir!, WorkspaceLoader.OutputMarkerFile),
                 $"Gerado pelo Migrator em {DateTime.Now:O} a partir de {workspace.RootDir}{Environment.NewLine}", cancellationToken);
 
-            if (llm != null && !options.KeepsFramework) await new LlmCodeDrafter(llm, options.Llm, result.OutputDir!).DraftAsync(result, progress, cancellationToken);
+            if (llm != null && !options.KeepsFramework) await new LlmCodeDrafter(llm, options.Llm, result.SourceDir!).DraftAsync(result, progress, cancellationToken);
 
             if (options.VerifyBuild && options.KeepsFramework)
             {
@@ -208,14 +212,14 @@ public sealed class MigrationEngine
         var built = result.Projects.Where(p => p.Build is { Succeeded: true } && p.OutputProjectPath != null).ToList();
         foreach (var project in built)
         {
-            var projectPath = Path.Combine(result.OutputDir!, project.OutputProjectPath!);
+            var projectPath = Path.Combine(result.SourceDir!, project.OutputProjectPath!);
             var projectDir = Path.GetDirectoryName(projectPath)!;
             var assembly = string.IsNullOrEmpty(project.Project.AssemblyName) ? project.Project.Name : project.Project.AssemblyName;
 
             if (options.RunTests && project.Project.Kind == ProjectKind.Test)
             {
                 progress?.Report($"Executando testes: {project.Project.Name}...");
-                var tests = await RuntimeVerifier.RunTestsAsync(projectPath, result.OutputDir!, TimeSpan.FromMinutes(10), cancellationToken);
+                var tests = await RuntimeVerifier.RunTestsAsync(projectPath, result.SourceDir!, TimeSpan.FromMinutes(10), cancellationToken);
                 project.Tests = tests;
                 project.Inventory.Add(tests.Succeeded
                     ? Runtime(project, InventorySeverity.Info, "TEST-RUN", $"Testes migrados executados: {tests.Passed} passaram{(tests.Skipped > 0 ? $", {tests.Skipped} ignorados" : "")}",
@@ -255,7 +259,7 @@ public sealed class MigrationEngine
                     progress?.Report($"docker build: {project.Project.Name}...");
                     var dockerfile = Path.Combine(project.RelativeDir, "Dockerfile");
                     var tag = $"migrator/{project.Project.Name.ToLowerInvariant()}:verify";
-                    var build = await RuntimeVerifier.DockerBuildAsync(dockerfile, result.OutputDir!, tag, TimeSpan.FromMinutes(20), cancellationToken);
+                    var build = await RuntimeVerifier.DockerBuildAsync(dockerfile, result.SourceDir!, tag, TimeSpan.FromMinutes(20), cancellationToken);
                     project.DockerBuildSucceeded = build.ExitCode == 0;
                     project.Inventory.Add(build.ExitCode == 0
                         ? Runtime(project, InventorySeverity.Info, "DOCKER-OK", $"Imagem Docker construída ({tag})", "docker build concluído com o Dockerfile gerado.", "Nenhuma ação necessária.", auto: true)
@@ -287,7 +291,7 @@ public sealed class MigrationEngine
     private static async Task FixBuildWithLlmAsync(LlmSession llm, SolutionResult result, IReadOnlyList<MigratedProject> ordered, MigrationOptions options,
         IProgress<string>? progress, CancellationToken cancellationToken)
     {
-        var fixer = new LlmCodeFixer(llm, options.Llm, result.OutputDir!, result.ReportDir!);
+        var fixer = new LlmCodeFixer(llm, options.Llm, result.SourceDir!, result.ReportDir!);
         var totalBefore = result.AllItems.Count(i => i.Category == InventoryCategory.Build && i.Severity == InventorySeverity.Breaking);
         async Task RebuildAsync(string label)
         {
@@ -406,20 +410,38 @@ public sealed class MigrationEngine
         Directory.CreateDirectory(output);
     }
 
-    private static async Task ApplyAsync(OutputPlan plan, string outputDir)
+    /// <summary>Repository-level artifacts (infra, pipeline, tests specs, secrets) stay at the root; everything else is the solution under app/src.</summary>
+    internal static bool IsRepositoryRootPath(string relativePath)
+    {
+        var unix = relativePath.Replace('\\', '/');
+        return unix.StartsWith("infra/", StringComparison.Ordinal) || unix.StartsWith(".github/", StringComparison.Ordinal) || unix.StartsWith("tests/", StringComparison.Ordinal)
+            || unix.StartsWith(SecretsExtractor.RootFolder + "/", StringComparison.Ordinal) || unix is ".iupipes.yml" or "skip.ini";
+    }
+
+    private static async Task ApplyAsync(OutputPlan plan, string outputDir, string sourceDir)
     {
         foreach (var (source, relative) in plan.Copies)
         {
-            var target = Path.Combine(outputDir, relative);
+            var target = Path.Combine(IsRepositoryRootPath(relative) ? outputDir : sourceDir, relative);
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             File.Copy(source, target, overwrite: true);
         }
         foreach (var (relative, content) in plan.Writes)
         {
-            var target = Path.Combine(outputDir, relative);
+            var target = Path.Combine(IsRepositoryRootPath(relative) ? outputDir : sourceDir, relative);
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             await File.WriteAllTextAsync(target, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: WantsBom(relative)));
         }
+    }
+
+    /// <summary>Root files every repository of the platform carries.</summary>
+    private static void WriteRootFiles(string outputDir)
+    {
+        var attributes = Path.Combine(outputDir, ".gitattributes");
+        if (!File.Exists(attributes)) File.WriteAllText(attributes, "* text=auto\n*.sh text eol=lf\n*.ps1 text eol=crlf\n*.cs diff=csharp\n");
+        var readme = Path.Combine(outputDir, "README.md");
+        if (!File.Exists(readme))
+            File.WriteAllText(readme, "# Aplicação migrada pelo Migrator\n\n- `app/src/`: a solução (código e projetos).\n- `infra/`: CloudFormation da aplicação (`service.yml`, `data.yml`) e `dev/`, `hom/`, `prod/` com os parâmetros por ambiente; leia `infra/README.md`.\n- `tests/`: specs dos testes de aceitação (TAAC) executados pela esteira.\n- `.iupipes.yml`: descritor da esteira.\n- `_migration-report/`: inventário, modernização, dados acessados e arquitetura (não versionar).\n");
     }
 
     private static void WriteRootGitIgnore(string outputDir)
@@ -466,11 +488,11 @@ public sealed class MigrationEngine
     /// <summary>The output always carries a nuget.config when a private feed is involved: copied from the given file, or generated from --nuget-source.</summary>
     private static void WriteNuGetConfig(string? configPath, NuGetSource source, SolutionResult result)
     {
-        var target = Path.Combine(result.OutputDir!, "nuget.config");
+        var target = Path.Combine(result.SourceDir!, "nuget.config");
         var explicitConfig = configPath != null && !Path.GetDirectoryName(configPath)!.Equals(result.RootDir.TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase);
         if (explicitConfig)
         {
-            foreach (var stale in Directory.EnumerateFiles(result.OutputDir!).Where(f => Path.GetFileName(f).Equals("nuget.config", StringComparison.OrdinalIgnoreCase))) File.Delete(stale);
+            foreach (var stale in Directory.EnumerateFiles(result.SourceDir!).Where(f => Path.GetFileName(f).Equals("nuget.config", StringComparison.OrdinalIgnoreCase))) File.Delete(stale);
             File.Copy(configPath!, target, overwrite: true);
             result.GlobalItems.Add(new InventoryItem
             {
@@ -479,7 +501,7 @@ public sealed class MigrationEngine
                 Suggestion = "Se o arquivo tiver credenciais em texto claro, prefira variáveis de ambiente (%ARTIFACTORY_TOKEN%) ou o Credential Provider do feed.", AutoMigrated = true, FilePath = "nuget.config"
             });
         }
-        else if (!source.IsNuGetOrg && NuGetConfigFile.Find(result.OutputDir!) == null)
+        else if (!source.IsNuGetOrg && NuGetConfigFile.Find(result.SourceDir!) == null)
         {
             File.WriteAllText(target, $"""
                 <?xml version="1.0" encoding="utf-8"?>
@@ -539,14 +561,16 @@ public sealed class MigrationEngine
                 .Where(p => p.OutputProjectPath != null)
                 .OrderBy(p => p.OutputProjectPath, StringComparer.OrdinalIgnoreCase)
                 .Select(p => new XElement("Project", new XAttribute("Path", p.OutputProjectPath!.Replace('\\', '/')))));
+        Directory.CreateDirectory(result.SourceDir!);
         if (result.Options.KeepsFramework && workspace.SolutionFile != null && workspace.SolutionFile.EndsWith(".sln", StringComparison.OrdinalIgnoreCase))
         {
             // Old-style projects stay old-style: the original .sln (same relative paths) is the natural solution file.
-            var copy = Path.Combine(result.OutputDir!, Path.GetFileName(workspace.SolutionFile));
+            var copy = Path.Combine(result.SourceDir!, Path.GetFileName(workspace.SolutionFile));
             File.Copy(workspace.SolutionFile, copy, overwrite: true);
             return copy;
         }
-        var path = Path.Combine(result.OutputDir!, workspace.Name + ".slnx");
+        var path = Path.Combine(result.SourceDir!, workspace.Name + ".slnx");
+        Directory.CreateDirectory(result.SourceDir!);
         File.WriteAllText(path, solution + Environment.NewLine);
         return path;
     }
@@ -603,8 +627,8 @@ public sealed class MigrationEngine
             if (remaining <= TimeSpan.Zero) { timedOut = true; break; }
 
             progress?.Report($"Build de verificação: {info.Name}...");
-            var path = Path.Combine(result.OutputDir!, project.Result.OutputProjectPath!);
-            var outcome = await BuildVerifier.BuildAsync(path, result.OutputDir!, remaining, cancellationToken);
+            var path = Path.Combine(result.SourceDir!, project.Result.OutputProjectPath!);
+            var outcome = await BuildVerifier.BuildAsync(path, result.SourceDir!, remaining, cancellationToken);
             log.AppendLine($"===== dotnet build {project.Result.OutputProjectPath} (código {outcome.ExitCode}) =====").AppendLine(outcome.Log);
             diagnostics.AddRange(outcome.Diagnostics);
             if (outcome.TimedOut) { timedOut = true; break; }
@@ -651,7 +675,7 @@ public sealed class MigrationEngine
     {
         var byProject = result.Projects
             .Where(p => p.OutputProjectPath != null)
-            .ToDictionary(p => Path.GetFullPath(Path.Combine(result.OutputDir!, p.OutputProjectPath!)), p => p, StringComparer.OrdinalIgnoreCase);
+            .ToDictionary(p => Path.GetFullPath(Path.Combine(result.SourceDir!, p.OutputProjectPath!)), p => p, StringComparer.OrdinalIgnoreCase);
         var byDirectory = byProject
             .Select(kv => (Dir: Path.GetDirectoryName(kv.Key)! + Path.DirectorySeparatorChar, Project: kv.Value))
             .OrderByDescending(x => x.Dir.Length)
@@ -674,7 +698,7 @@ public sealed class MigrationEngine
             }
             if (!isError && !BuildVerifier.IsRelevantWarning(diagnostic.Code)) continue;
 
-            var projectDir = owner != null ? Path.GetDirectoryName(Path.Combine(result.OutputDir!, owner.OutputProjectPath!))! : result.OutputDir!;
+            var projectDir = owner != null ? Path.GetDirectoryName(Path.Combine(result.SourceDir!, owner.OutputProjectPath!))! : result.SourceDir!;
             var item = new InventoryItem
             {
                 Project = owner?.Project.Name ?? "(solução)",

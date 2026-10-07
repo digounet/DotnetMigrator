@@ -642,14 +642,14 @@ public static partial class CloudFormationGenerator
         foreach (var d in deployables)
         {
             sb.AppendLine($"          - micro: {Micro(result, d)}");
-            sb.AppendLine($"            project: {d.Result.OutputProjectPath!.Replace('\\', '/')}");
+            sb.AppendLine($"            project: {SourceDir}/{d.Result.OutputProjectPath!.Replace('\\', '/')}");
             sb.AppendLine($"            kind: {(d.Result.Project.Kind == ProjectKind.Web ? "web" : "exe")}");
         }
         sb.AppendLine("    steps:");
         sb.AppendLine("      - uses: actions/checkout@v4");
         sb.AppendLine("      - uses: microsoft/setup-msbuild@v2");
         sb.AppendLine("      - uses: nuget/setup-nuget@v2");
-        sb.AppendLine($"      - run: nuget restore {(solution.Length > 0 ? solution : "${{ matrix.project }}")}");
+        sb.AppendLine($"      - run: nuget restore {(solution.Length > 0 ? SourceDir + "/" + solution : "${{ matrix.project }}")}");
         sb.AppendLine("      - name: Publish (web)");
         sb.AppendLine("        if: matrix.kind == 'web'");
         sb.AppendLine("        run: msbuild ${{ matrix.project }} /p:Configuration=Release /p:DeployOnBuild=true /p:WebPublishMethod=FileSystem /p:PublishUrl=${{ github.workspace }}\\bundle\\app /p:DeleteExistingFiles=true /p:MarkWebConfigAssistFilesAsExclude=false");

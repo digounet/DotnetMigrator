@@ -3,7 +3,7 @@
 - **Origem:** `/Users/pablo/Source/dotnet/DotnetMigrator/DotnetMigrator/samples/LegacyShop`
 - **Modo:** Análise (nenhum arquivo alterado)
 - **Destino:** .NET Framework 4.8.1
-- **Gerado em:** 06/10/2026 23:23
+- **Gerado em:** 07/10/2026 05:49
 - **Compatibilidade NuGet verificada:** não (feed: nuget.org (https://api.nuget.org/v3/index.json))
 - **Build de verificação:** não executado
 
