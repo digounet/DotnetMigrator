@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Migrator — .NET Framework → .NET 10 na AWS</title>
-<meta name="description" content="CLI que migra aplicações .NET Framework para .NET 10, sugere modernizações e propõe a arquitetura alvo na AWS, com assistência opcional de LLM.">
+<title>Migrator — .NET Framework na AWS</title>
+<meta name="description" content="CLI que leva aplicações .NET Framework para a AWS por lift-and-shift (EC2 Windows, CloudFormation no layout da plataforma) ou as migra para .NET 10, com inventário, dados acessados, modernização e arquitetura alvo.">
 <style>
   :root {
     --bg: #f8f9fa; --fg: #202124; --muted: #5f6368; --border: #dadce0; --card: #fff;
@@ -68,8 +68,8 @@
 <header class="hero">
   <div class="wrap">
     <span class="pill">CLI em .NET 10 · código aberto · relatórios em pt-BR</span>
-    <h1>Migrator: do .NET Framework ao .NET 10 na AWS</h1>
-    <p class="lead">Lê a aplicação inteira, gera uma cópia migrada e compila, executa os testes e sobe a app para testar <code>/health</code>. Entende o que a aplicação faz, aponta bibliotecas que viraram pagas ou foram descontinuadas e código que muda de comportamento no Linux, e propõe onde cada projeto deve rodar na AWS, com Dockerfile, Terraform e pipeline prontos. Em lote, consolida dezenas de aplicações em ondas de migração. Com uma LLM plugada, ainda fecha o build sozinho.</p>
+    <h1>Migrator: aplicações .NET Framework na AWS</h1>
+    <p class="lead">Lê a aplicação inteira e gera, ao lado da original, um repositório pronto para a esteira da plataforma: código em <code>app/src</code>, infraestrutura em CloudFormation com parâmetros por ambiente (dev, hom, prod), descritor da esteira e testes de aceitação. O padrão é <strong>lift-and-shift</strong>: código intocado em .NET Framework 4.8.1 rodando em EC2 Windows, com URLs e e-mails fixos virando parâmetros e senhas virando referências ao Secrets Manager. Com <code>--target net10</code>, reescreve o código para .NET 10, compila, testa e hospeda em ECS Fargate. Em qualquer caso entrega o inventário, os bancos, tabelas e campos acessados, as sugestões de modernização e a arquitetura alvo.</p>
     <div class="cta">
       <a class="primary" href="demo/migration-report.html">Ver um relatório de exemplo</a>
       <a class="secondary" href="https://github.com/digounet/DotnetMigrator">Código no GitHub</a>
@@ -81,40 +81,41 @@
 <main class="wrap">
   <section>
     <h2>Pensado para migrar um portfólio, não um projeto</h2>
-    <p class="sub">Dezenas de aplicações com o mesmo pipeline, a mesma arquitetura de referência e um inventário comparável entre elas. O código original nunca é alterado: a saída é uma cópia ao lado.</p>
+    <p class="sub">Dezenas de aplicações com a mesma esteira, a mesma arquitetura de referência e um inventário comparável entre elas. O código original nunca é alterado: a saída é uma cópia ao lado, no layout do repositório da plataforma.</p>
     <div class="cards">
-      <div class="card"><span class="tag green">Migração</span><h3>Converte, compila e prova</h3><p>csproj → SDK-style, packages.config → PackageReference verificado no nuget.org, web.config → appsettings.json com credenciais movidas para <code>_secrets/</code>, Program.cs gerado, controllers Web API reescritos com Roslyn, Windows Service → Worker Service, <code>IConfiguration</code> injetado. Depois: build por projeto, testes migrados executados e <code>/health</code> probado.</p></div>
-      <div class="card"><span class="tag purple">Modernização</span><h3>Aponta os gaps</h3><p>AutoMapper 15+, MediatR 13+, FluentAssertions 8+, EPPlus 5+, MassTransit 9+ (viraram pagos), EWS, Topshelf, Crystal (descontinuados) e C# que compila mas muda no .NET 10/Linux: code pages, cultura, <code>TransactionScope</code>, <code>DateTime.Now</code> em UTC, caminhos com barra invertida.</p></div>
-      <div class="card"><span class="tag blue">Arquitetura AWS</span><h3>Recomenda e gera a infraestrutura</h3><p>ECS Fargate para web, Lambda para automações orientadas a evento (com <code>Function.cs</code> gerado), tarefa agendada para jobs, containers Windows só com dependência dura. Sai como módulo Terraform validado (VPC, ECS/ALB, RDS, S3, SQS, SES, ElastiCache, IAM, alarmes) e workflow de deploy no GitHub Actions.</p></div>
-      <div class="card"><span class="tag amber">Portfólio e LLM</span><h3>Dezenas de apps, um plano</h3><p><code>portfolio</code> analisa todas as soluções de uma pasta e consolida ranking de esforço, gaps mais frequentes, bancos compartilhados e ondas de migração, comparável a uma baseline. Com <code>--llm</code>, o modelo fecha o build (revertido se piorar), rascunha conversões e tria falsos positivos. Sem LLM, tudo continua funcionando.</p></div>
+      <div class="card"><span class="tag green">Lift-and-shift (padrão)</span><h3>Sai do datacenter sem reescrever</h3><p>Projetos elevados para .NET Framework 4.8.1 com o código como está. URLs e e-mails fixos no código e nos configs viram parâmetros com um valor por ambiente; senhas, tokens e connection strings viram nomes no Secrets Manager, com os valores em <code>_secrets/</code> fora do git. EC2 Windows com IIS, Auto Scaling, ALB e CodeDeploy em CloudFormation.</p></div>
+      <div class="card"><span class="tag green">Modernização (<code>--target net10</code>)</span><h3>Converte, compila e prova</h3><p>csproj → SDK-style, packages.config → PackageReference verificado no feed, web.config → appsettings.json, Program.cs gerado, controllers Web API reescritos com Roslyn, Windows Service → Worker Service, <code>IConfiguration</code> injetado. Depois: build por projeto, testes migrados executados e <code>/health</code> probado. ECS Fargate; Lambda só com <code>--serverless</code>.</p></div>
+      <div class="card"><span class="tag purple">Análise</span><h3>Aponta os gaps e os dados</h3><p>AutoMapper 15+, MediatR 13+, FluentAssertions 8+, EPPlus 5+, MassTransit 9+ (viraram pagos), EWS, Topshelf, Crystal (descontinuados) e C# que compila mas muda no .NET 10/Linux: code pages, cultura, <code>TransactionScope</code>, <code>DateTime.Now</code> em UTC, caminhos com barra invertida. E, sempre, os bancos, tabelas e campos que o código acessa, com tecnologia, operação e arquivo:linha.</p></div>
+      <div class="card"><span class="tag blue">Infra no layout da plataforma</span><h3>Pronto para a esteira</h3><p><code>infra/service.yml</code> fiel ao da plataforma (NLB, Datadog/FireLens, tags finops, roles via SSM), <code>infra/data.yml</code>, <code>infra/{dev,hom,prod}/parameters.json</code>, scripts do CodeDeploy, <code>.iupipes.yml</code>, specs TAAC em <code>tests/</code> e workflow do GitHub Actions. Tudo passa no <code>cfn-lint</code>. Terraform disponível com <code>--iac terraform</code>.</p></div>
+      <div class="card"><span class="tag amber">Portfólio e LLM</span><h3>Dezenas de apps, um plano</h3><p><code>portfolio</code> analisa todas as soluções de uma pasta e consolida ranking de esforço, gaps mais frequentes, bancos compartilhados e ondas de migração, comparável a uma baseline. Com <code>--llm api</code> (LLM corporativa via API, só client_id e client_secret) ou <code>--llm ollama</code>, o modelo fecha o build (revertido se piorar), rascunha conversões e tria falsos positivos. Sem LLM, tudo continua funcionando.</p></div>
     </div>
   </section>
 
   <section>
     <h2>Como funciona</h2>
-    <p class="sub"><code>analyze</code> roda tudo em memória e só grava os relatórios; <code>migrate</code> também grava a cópia, compila, testa e gera os artefatos de deploy. Diagrama interativo: clique nos nós, use as visões guiadas e o zoom.</p>
+    <p class="sub"><code>analyze</code> roda tudo em memória e só grava os relatórios; <code>migrate</code> também grava o repositório e, no destino .NET 10, compila e testa. O diagrama mostra o pipeline de modernização; no lift-and-shift as etapas de reescrita e build são puladas e o restante (perfil, dados, modernização, arquitetura, infra) é igual. Clique nos nós, use as visões guiadas e o zoom.</p>
     <iframe class="diagram" src="diagrams/pipeline.html" title="Como o Migrator processa uma aplicação" loading="lazy"></iframe>
     <p class="note"><a href="diagrams/pipeline.html">Abrir o diagrama em tela cheia</a></p>
   </section>
 
   <section>
     <h2>Onde cada tipo de aplicação vai parar</h2>
-    <p class="sub">A decisão sai do perfil de cada projeto, incluindo o que as bibliotecas referenciadas fazem.</p>
+    <p class="sub">A decisão sai do perfil de cada projeto, incluindo o que as bibliotecas referenciadas fazem. No lift-and-shift tudo vai para EC2 Windows e o relatório mostra, como alternativa, a hospedagem que o projeto teria depois de modernizado.</p>
     <div class="table-wrap">
     <table>
-      <thead><tr><th>Projeto</th><th>Recomendação padrão</th><th>Quando muda</th></tr></thead>
+      <thead><tr><th>Projeto</th><th><code>--target framework</code> (padrão)</th><th><code>--target net10</code></th></tr></thead>
       <tbody>
-        <tr><td>Web (MVC / Web API)</td><td><strong>ECS Fargate (Linux) + ALB</strong></td><td>COM, Registro, Office Interop, Crystal, WMI → containers Windows; IIS em código → EC2 Windows. API sem views → alternativa Lambda; app interna simples → App Runner.</td></tr>
-        <tr><td>Automação orientada a evento (lê pasta ou caixa de e-mail, processa planilhas, consome fila, grava no banco)</td><td><strong>AWS Lambda</strong> com o gatilho certo: S3 Event Notifications, Amazon SES recebimento → S3, SQS; pastas de rede via Storage Gateway</td><td>Quartz/Hangfire embutido, projeto grande ou dependência Windows substituível → tarefa ECS agendada</td></tr>
-        <tr><td>Windows Service / console com timer</td><td><strong>Tarefa ECS Fargate agendada</strong> pelo EventBridge Scheduler</td><td>Alternativa Lambda se cada execução dura menos de 15 min</td></tr>
-        <tr><td>Consumidor de fila (MSMQ, RabbitMQ, MassTransit)</td><td><strong>Worker ECS Fargate</strong> consumindo SQS, escalado pela fila</td><td>Alternativa Lambda com gatilho SQS</td></tr>
-        <tr><td>Biblioteca / testes</td><td>Empacotada nos consumidores / roda no CI</td><td>—</td></tr>
+        <tr><td>Web (MVC / Web API / Web Forms)</td><td><strong>EC2 Windows com IIS</strong> atrás do ALB compartilhado, Auto Scaling e CodeDeploy</td><td><strong>ECS Fargate (Linux) + ALB</strong>; COM, Registro, Office Interop, Crystal, WMI → containers Windows; IIS em código → EC2 Windows</td></tr>
+        <tr><td>Windows Service / console com timer ou Quartz</td><td><strong>EC2 Windows</strong> (serviço ou Agendador de Tarefas)</td><td><strong>Tarefa ECS Fargate agendada</strong> pelo EventBridge Scheduler, <code>Main()</code> intacto</td></tr>
+        <tr><td>Automação orientada a evento (lê pasta ou caixa de e-mail, processa planilhas, consome fila)</td><td>EC2 Windows; pastas de rede → FSx for Windows</td><td>Tarefa ECS agendada; com <code>--serverless</code>, <strong>AWS Lambda</strong> com o gatilho certo (S3 Event Notifications, SES de entrada → S3, SQS) e <code>Function.cs</code> gerado</td></tr>
+        <tr><td>Consumidor de fila (MSMQ, RabbitMQ, MassTransit)</td><td>EC2 Windows</td><td><strong>Worker ECS Fargate</strong> consumindo SQS, escalado pela fila</td></tr>
+        <tr><td>Biblioteca / testes</td><td colspan="2">Empacotada nos consumidores / roda no CI</td></tr>
       </tbody>
     </table>
     </div>
     <h3>Exemplo: a solução de demonstração</h3>
     <iframe class="diagram" src="diagrams/legacyshop-aws.html" title="LegacyShop na AWS: arquitetura proposta pelo Migrator" loading="lazy"></iframe>
-    <p class="note">Arquitetura proposta pela ferramenta para <code>samples/LegacyShop</code>: site MVC + Web API, Windows Service com Quartz, biblioteca compartilhada, console que lê pasta de rede e caixa postal via EWS, e um projeto VB.NET. <a href="diagrams/legacyshop-aws.html">Abrir em tela cheia</a> · <a href="demo/migration-report.html">Ver o relatório completo</a>, com 52 sugestões de modernização.</p>
+    <p class="note">Arquitetura proposta pela ferramenta para <code>samples/LegacyShop</code>: site MVC + Web API, Windows Service com Quartz, biblioteca compartilhada, console que lê pasta de rede e caixa postal via EWS, e um projeto VB.NET. <a href="diagrams/legacyshop-aws.html">Abrir em tela cheia</a> · <a href="demo/migration-report.html">Ver o relatório completo</a> (lift-and-shift, com 39 sugestões de modernização e os dados acessados por banco).</p>
   </section>
 
   <section>
@@ -127,7 +128,7 @@
           <li><strong>Rascunhos</strong>: <code>IHttpModule</code> → middleware, filtros do System.Web → <code>IActionFilter</code>, <code>ServiceBase</code> → <code>BackgroundService</code>, salvos como <code>.Migrator.cs.txt</code>.</li>
           <li><strong>Leitura do arquiteto</strong>: resumo executivo, decisões por projeto, riscos prioritários e ordem de trabalho a partir do dossiê estruturado.</li>
         </ul>
-        <p>A interface é mínima (<code>systemMessage</code> + <code>userMessage</code> → texto): basta implementar <code>ILlmAssistant</code> sobre o SDK da empresa, OpenAI, Bedrock ou Gemini. Respostas são cacheadas; o Ollama local serve para desenvolvimento.</p>
+        <p>A LLM corporativa entra com <code>--llm api</code>: a URL do gateway é fixa no código e só <code>MIGRATOR_LLM_CLIENT_ID</code> e <code>MIGRATOR_LLM_CLIENT_SECRET</code> precisam ser informados (OAuth2 client credentials, corpo compatível com OpenAI, modelo por parâmetro). Outros provedores implementam <code>ILlmAssistant</code> (<code>systemMessage</code> + <code>userMessage</code> → texto). Respostas são cacheadas; o Ollama local serve para desenvolvimento.</p>
       </div>
       <div>
         <h3 style="margin-top:0">Medido no sample</h3>
@@ -154,24 +155,27 @@
 cd DotnetMigrator
 dotnet build Migrator.slnx
 
-# 1) só análise: inventário, modernização e arquitetura, sem gravar código
+# 1) só análise: inventário, dados acessados, modernização e arquitetura, sem gravar código
 dotnet run --project src/Migrator.Cli -- analyze C:\src\MinhaApp\MinhaApp.sln
 
-# 2) migração: gera C:\src\MinhaApp.net10 com Dockerfiles, compila e gera relatórios
+# 2) lift-and-shift (padrão): gera C:\src\MinhaApp.net481 no layout da plataforma (app/src, infra/, .iupipes.yml, tests/)
 dotnet run --project src/Migrator.Cli -- migrate C:\src\MinhaApp\MinhaApp.sln
 
-# 3) portfólio: todas as soluções de uma pasta, ranking de esforço e ondas
+# 3) modernização: gera C:\src\MinhaApp.net10 com Dockerfiles, compila, testa e gera a infra ECS
+dotnet run --project src/Migrator.Cli -- migrate C:\src\MinhaApp\MinhaApp.sln --target net10
+
+# 4) portfólio: todas as soluções de uma pasta, ranking de esforço e ondas
 dotnet run --project src/Migrator.Cli -- portfolio C:\src\aplicacoes --report C:\src\portfolio
 
-# 4) com LLM local (Ollama) fechando o build
-ollama pull qwen2.5-coder:7b
-dotnet run --project src/Migrator.Cli -- migrate C:\src\MinhaApp\MinhaApp.sln --llm ollama --llm-model qwen2.5-coder:7b</code></pre>
-    <p>Saídas: <code>migration-report.html</code> (navegável), <code>migration-report.md</code> (para PR/wiki, com o diagrama), <code>inventory.xlsx</code> (abas Resumo, Inventário, Modernização, Arquitetura AWS), <code>inventory.csv</code>, <code>modernization.csv</code>, <code>migration-result.json</code> e <code>build-verification.log</code>. Na cópia migrada: <code>Dockerfile</code> por projeto, <code>infra/terraform</code>, <code>.github/workflows/deploy.yml</code> e <code>_secrets/</code> (fora do git e do Docker).</p>
+# 5) com a LLM corporativa fechando o build (ou --llm ollama para um modelo local)
+$env:MIGRATOR_LLM_CLIENT_ID = "..."; $env:MIGRATOR_LLM_CLIENT_SECRET = "..."
+dotnet run --project src/Migrator.Cli -- migrate C:\src\MinhaApp\MinhaApp.sln --target net10 --llm api</code></pre>
+    <p>Saída: a solução em <code>app/src</code>; <code>infra/service.yml</code>, <code>infra/data.yml</code> e <code>infra/{dev,hom,prod}/parameters.json</code>; <code>infra/codedeploy/</code> (EC2) ou Dockerfiles (ECS); <code>.iupipes.yml</code>, <code>tests/testspec-*.yml</code>, <code>.github/workflows/deploy.yml</code>; <code>_secrets/</code> fora do git; e em <code>_migration-report/</code> os relatórios <code>migration-report.html</code>, <code>migration-report.md</code>, <code>inventory.xlsx</code> (Resumo, Inventário, Dados acessados, Modernização, Arquitetura AWS), <code>inventory.csv</code>, <code>modernization.csv</code>, <code>data-access.csv</code> e <code>migration-result.json</code>.</p>
     <div class="kpis">
-      <div class="kpi"><div class="n">4</div><div class="l">camadas: migração, modernização, arquitetura, portfólio</div></div>
+      <div class="kpi"><div class="n">2</div><div class="l">destinos: lift-and-shift (.NET Framework 4.8.1, EC2) e .NET 10 (ECS)</div></div>
       <div class="kpi"><div class="n">100+</div><div class="l">regras de pacotes e código, todas em tabelas</div></div>
       <div class="kpi"><div class="n">0</div><div class="l">alterações no código original</div></div>
-      <div class="kpi"><div class="n">128</div><div class="l">testes automatizados</div></div>
+      <div class="kpi"><div class="n">163</div><div class="l">testes automatizados</div></div>
     </div>
   </section>
 
@@ -181,7 +185,7 @@ dotnet run --project src/Migrator.Cli -- migrate C:\src\MinhaApp\MinhaApp.sln --
   </section>
 </main>
 
-<footer>Migrator · .NET Framework → .NET 10 · <a href="https://github.com/digounet/DotnetMigrator">github.com/digounet/DotnetMigrator</a></footer>
+<footer>Migrator · .NET Framework na AWS · <a href="https://github.com/digounet/DotnetMigrator">github.com/digounet/DotnetMigrator</a></footer>
 
 
 </body>

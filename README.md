@@ -1,93 +1,64 @@
-# Migrator — .NET Framework → .NET 10
+# Migrator — aplicações .NET Framework para a AWS
 
 > Site e relatório de demonstração: **https://digounet.github.io/DotnetMigrator/**
 
-Ferramenta de linha de comando que lê uma aplicação .NET Framework inteira (solução, projeto ou diretório), gera uma **cópia** migrada para .NET 10, compila essa cópia e produz um **inventário** do que ainda exige ação manual, com uma sugestão para cada item. O código original nunca é alterado.
+CLI em .NET 10 que lê uma aplicação .NET Framework inteira (`.sln`, `.slnx`, `.csproj` ou pasta) e gera, **ao lado da original**, um repositório pronto para a esteira da plataforma: o código em `app/src`, a infraestrutura em `infra/` (CloudFormation, um arquivo de parâmetros por ambiente), o descritor da esteira, os testes de aceitação e os relatórios. O código original nunca é alterado.
 
-Além da migração, a ferramenta **entende a aplicação** e entrega duas camadas de recomendação: **modernização** (bibliotecas que passaram a ser pagas ou foram descontinuadas, código C# que compila mas muda de comportamento no .NET 10/Linux, idiomas antigos) e **arquitetura alvo na AWS** (qual serviço hospeda cada projeto — ECS Fargate, tarefa agendada, Lambda, containers Windows — e quais serviços gerenciados substituem banco, filas, arquivos, e-mail, sessão, segredos e agendamento), com Dockerfiles gerados, diagrama e plano de migração. Foi pensada para programas de migração em lote: dezenas de aplicações, mesmo pipeline, mesma arquitetura de referência.
+Há dois destinos:
 
-Tipos de projeto suportados: ASP.NET MVC 5, ASP.NET Web API 2, console, Windows Service (convertido em Worker Service), bibliotecas e testes (MSTest/NUnit/xUnit). Projetos WinForms/WPF recebem apenas a conversão do `.csproj` (`net10.0-windows`). **Projetos VB.NET** são carregados, perfilados (pacotes, sinais de arquitetura, hospedagem na AWS) e aparecem no inventário com o item `PRJ-VB` explicando as opções (Upgrade Assistant mantendo VB, ou conversão para C# e nova rodada do Migrator), mas não são convertidos. **Páginas Web Forms** (`.aspx/.ascx/.master`) vão para `_Legacy/` e geram o item `WEB-WEBFORMS` com a contagem e uma estimativa de reescrita; uma aplicação só de Web Forms é recomendada para IIS em EC2 Windows até ser reescrita. Web Site (sem `.csproj`) e projetos de banco de dados aparecem como não migrados.
+| | `--target framework` (padrão) | `--target net10` |
+|---|---|---|
+| **Objetivo** | Lift-and-shift: tirar a aplicação do datacenter agora, com o mínimo de mudanças | Modernizar: reescrever para .NET 10 e rodar em container Linux |
+| **Código** | Intocado; só os projetos sobem para .NET Framework 4.8.1 | Convertido (csproj SDK, `appsettings.json`, `Program.cs`, controllers com Roslyn, Worker Service...) e compilado |
+| **Proteção mínima** | URLs e e-mails fixos viram parâmetros por ambiente; senhas e tokens viram referências ao Secrets Manager | Idem |
+| **Hospedagem** | EC2 Windows (IIS, serviço Windows, Agendador) com Auto Scaling, ALB e CodeDeploy | ECS Fargate (web, workers, tarefas agendadas); Lambda só com `--serverless` |
+| **Infra** | CloudFormation no layout da plataforma (`infra/service.yml` + `infra/{dev,hom,prod}/parameters.json`) | Igual; Terraform com `--iac terraform` |
+| **Saída padrão** | `<nome>.net481` | `<nome>.net10` |
 
-- [Resumo](#resumo)
-- [Início rápido](#início-rápido)
-- [Como funciona](#como-funciona)
-- [Modernização e arquitetura AWS](#modernização-e-arquitetura-aws)
-- [Assistência por LLM (opcional)](#assistência-por-llm-opcional)
-- [Modo portfólio](#modo-portfólio)
-- [Infraestrutura como código e CI/CD](#infraestrutura-como-código-e-cicd)
-- [Feed NuGet privado (Artifactory, Nexus)](#feed-nuget-privado-artifactory-nexus)
-- [Exemplo: antes e depois](#exemplo-antes-e-depois)
-- [Lendo o inventário](#lendo-o-inventário)
-- [Fluxo de trabalho recomendado](#fluxo-de-trabalho-recomendado)
-- [Decisões de projeto](#decisões-de-projeto)
-- [Limitações conhecidas](#limitações-conhecidas)
-- [Referência da linha de comando](#referência-da-linha-de-comando)
-- [Estrutura do código e como estender](#estrutura-do-código-e-como-estender)
+Nos dois casos a ferramenta entrega o **inventário** (o que ainda exige ação manual, com sugestão), os **dados acessados** (banco, tecnologia, tabelas e campos), as **sugestões de modernização** (bibliotecas pagas ou descontinuadas, código que muda de comportamento) e a **arquitetura alvo na AWS** (diagrama, serviços, fases, riscos, custo). Foi pensada para programas de migração em lote: dezenas de aplicações, mesma esteira, mesma arquitetura de referência.
 
----
+Tipos de projeto: ASP.NET MVC 5, Web API 2, Web Forms (só no destino framework; no .NET 10 vai para `_Legacy/`), console, Windows Service, bibliotecas, testes (MSTest/NUnit/xUnit), WinForms/WPF (só o `.csproj`) e VB.NET (copiado no destino framework; só inventariado no .NET 10).
 
-## Resumo
-
-É uma CLI em .NET 10 que lê a aplicação inteira (`.sln`, `.slnx`, `.csproj` ou uma pasta), gera uma cópia migrada ao lado da original, compila essa cópia e entrega o inventário do que ainda precisa de ação manual, com sugestão em cada item. O projeto original nunca é alterado.
-
-```powershell
-migrator analyze C:\src\MinhaApp\MinhaApp.sln   # só gera o inventário, não grava código
-migrator migrate C:\src\MinhaApp\MinhaApp.sln   # gera C:\src\MinhaApp.net10 + relatórios
-```
-
-**O que ela converte sozinha:**
-
-- **Projetos:** `.csproj` antigo vira formato SDK com `net10.0`; `packages.config` vira `PackageReference`. Referências entre projetos, DLLs locais, arquivos linkados, recursos embutidos e build events são preservados.
-- **Pacotes NuGet:**
-  - Tem regras próprias para OWIN, Identity, Unity/Ninject, EF6, pacotes `.pt-br` e bibliotecas front-end.
-  - Para os demais, verifica no nuget.org se há versão compatível e só atualiza quando precisa.
-  - Não sobe para versões que passaram a ser pagas (AutoMapper ≥ 15, MediatR ≥ 13).
-  - Alinha as versões entre projetos para o restore não falhar.
-- **`web.config`/`app.config` → `appsettings.json`:** inclui `Web.Release.config` → `appsettings.Production.json`, seções customizadas, SMTP, endpoints WCF e log4net/NLog em arquivo próprio. As configurações de IIS (rewrite, headers, limites) ficam num `web.config` mínimo.
-- **`Program.cs` gerado:** rotas do `RouteConfig` e das áreas, filtros, CORS, Forms Authentication virando cookie, sessão, cultura pt-BR, limite de upload e os registros do Unity convertidos para o DI nativo.
-- **Código:** os controllers Web API ganham `[ApiController]`, rotas e verbos explícitos. Sem isso, o JSON do corpo e o roteamento `Get()`/`Post()` quebrariam em silêncio. Também converte bundles nas views, move arquivos estáticos para `wwwroot` e regrava arquivos ANSI em UTF-8 sem perder acentos.
-- **Código antigo sem equivalente** (`Global.asax`, `App_Start`, OWIN, WebForms, `.ashx`) vai para `_Legacy/`, fora do build, para consulta.
-
-**Inventário:** sai em HTML (com filtros), Markdown, Excel e CSV. Cada item traz severidade, arquivo e linha, e uma sugestão. Os erros do compilador da cópia migrada também entram no inventário.
-
-**Dados acessados (sempre):** o relatório lista, por banco, a tecnologia (SQL Server, Oracle...), as tabelas/procedures e os campos que o código acessa, com a operação (SELECT/INSERT/UPDATE/DELETE/EF), a forma de acesso (ADO.NET, Dapper, EF6/EF Core, EDMX, `.sql`) e o arquivo:linha. Veja [Dados acessados](#dados-acessados-bancos-tabelas-e-campos).
-
-**Lift-and-shift é o padrão.** `migrator migrate App.sln` copia os projetos como estão, eleva todos para .NET Framework 4.8.1 (última versão), tira do código e dos configs o que não pode ficar fixo (URLs e e-mails viram parâmetros por ambiente; senhas e tokens viram referências ao Secrets Manager) e gera a infraestrutura EC2 Windows + CodeDeploy em **CloudFormation**, no layout da plataforma (`infra/service.yml` + `infra/{dev,hom,prod}/parameters.json`). A migração de código para .NET 10 (ECS Fargate) é a opção `--target net10`, e Lambda só com `--serverless`. Veja [Destino .NET Framework 4.8.1](#destino-net-framework-481-o-padrão-sem-migrar-o-código) e [Infraestrutura como código](#infraestrutura-como-código-e-cicd).
-
-**Como testei:**
-
-- **Aplicação de exemplo:** criei uma aplicação legada realista em `samples/LegacyShop`, com MVC5 + Web API 2 + EF6, um Windows Service e testes MSTest.
-- **Migração de ponta a ponta:** os erros que o compilador encontrou na cópia migrada já estavam todos previstos no inventário.
-- **Testes automatizados:** 46 testes, todos passando.
-- **Relatório HTML:** abri no Edge e está renderizando corretamente.
-- **Ferramenta global:** o pacote instala e funciona como `migrator`.
-
-**Limitações:**
-
-- **Erros de build aparecem em camadas.** O compilador só mostra os erros dentro dos métodos depois que os erros de tipos e assinaturas são corrigidos. Na prática, o ciclo é corrigir, compilar e repetir.
-- **WebForms, WCF servidor e Identity 2 não são migrados.** Ficam no inventário como itens bloqueantes, com sugestão.
-- **EF6 é mantido na versão 6.5**, que roda no .NET 10, em vez de passar para EF Core. É a opção de menor risco; a troca para EF Core fica sugerida para uma etapa posterior.
-- **Projetos VB.NET ficam de fora** e aparecem listados como não migrados.
-- **Pacotes de feed privado** precisam do `NuGet.config` na raiz da solução para o build de verificação funcionar.
-- **Não testei com aplicações reais da sua empresa.** Sugiro começar rodando o `analyze` em uma delas; o que aparecer de padrão novo vira regra em `src/Migrator.Core/Data/` (o README explica como estender).
+- [1. Início rápido](#1-início-rápido)
+- [2. O que sai de uma migração](#2-o-que-sai-de-uma-migração)
+- [3. Destino .NET Framework 4.8.1 (padrão)](#3-destino-net-framework-481-padrão)
+- [4. Destino .NET 10](#4-destino-net-10)
+- [5. URLs, e-mails e credenciais viram configuração](#5-urls-e-mails-e-credenciais-viram-configuração)
+- [6. Dados acessados](#6-dados-acessados)
+- [7. Modernização e arquitetura AWS](#7-modernização-e-arquitetura-aws)
+- [8. Infraestrutura como código e esteira](#8-infraestrutura-como-código-e-esteira)
+- [9. Assistência por LLM](#9-assistência-por-llm)
+- [10. Modo portfólio](#10-modo-portfólio)
+- [11. Feed NuGet privado](#11-feed-nuget-privado)
+- [12. Relatórios e inventário](#12-relatórios-e-inventário)
+- [13. Referência da linha de comando](#13-referência-da-linha-de-comando)
+- [14. Fluxo recomendado](#14-fluxo-recomendado)
+- [15. Decisões de projeto e limitações](#15-decisões-de-projeto-e-limitações)
+- [16. Estrutura do código e como estender](#16-estrutura-do-código-e-como-estender)
 
 ---
 
-## Início rápido
+## 1. Início rápido
 
-Requisitos: SDK do .NET 10. Acesso ao nuget.org é recomendado (sem ele, use `--offline`). Para o build de verificação de projetos que usam feeds privados, a solução original precisa ter um `NuGet.config` na raiz (ele é copiado para a saída).
+Requisitos: SDK do .NET 10. Acesso ao nuget.org (ou a um feed privado, veja a [seção 11](#11-feed-nuget-privado)) para a checagem de pacotes e o build de verificação; sem acesso, use `--offline`. O build de verificação do destino framework exige MSBuild no Windows e por isso é feito pelo workflow gerado, não pela ferramenta.
 
 ```powershell
 dotnet build Migrator.slnx
 
-# 1) Análise: lê tudo, simula a migração em memória e gera só o inventário
+# só análise: inventário, dados acessados, modernização e arquitetura, sem gravar código
 dotnet run --project src/Migrator.Cli -- analyze C:\src\Loja\Loja.sln
 
-# 2) Migração: gera C:\src\Loja.net10, compila cada projeto e gera o inventário
+# lift-and-shift (padrão): gera C:\src\Loja.net481 no layout da plataforma
 dotnet run --project src/Migrator.Cli -- migrate C:\src\Loja\Loja.sln
+
+# modernização: gera C:\src\Loja.net10, compila, testa e sobe as apps para testar /health
+dotnet run --project src/Migrator.Cli -- migrate C:\src\Loja\Loja.sln --target net10
+
+# portfólio: todas as soluções de uma pasta, com ranking de esforço e ondas
+dotnet run --project src/Migrator.Cli -- portfolio C:\src\aplicacoes --report C:\src\portfolio
 ```
 
-Para usar como ferramenta global (comando `migrator`):
+Como ferramenta global (comando `migrator`):
 
 ```powershell
 dotnet pack src/Migrator.Cli -o nupkg
@@ -95,803 +66,475 @@ dotnet tool install -g Migrator.NetFramework --add-source nupkg
 migrator migrate C:\src\Loja\Loja.sln
 ```
 
+A solução de exemplo `samples/LegacyShop` (MVC 5 + Web API 2 + EF6, Windows Service com Quartz, console que lê pasta de rede e caixa postal via EWS, projeto VB.NET, testes MSTest) serve para experimentar: `migrate samples/LegacyShop/LegacyShop.sln --offline`.
+
 ---
 
-## Como funciona
+## 2. O que sai de uma migração
 
-As duas operações executam o mesmo pipeline. `analyze` roda tudo em memória e só grava os relatórios. `migrate` também grava a saída e compila.
+A saída reproduz o repositório padrão da plataforma, nos dois destinos e com qualquer IaC:
 
 ```
- entrada (.sln / .slnx / .csproj / pasta)
-   │
-   ▼
- 1. Leitura da aplicação ........ WorkspaceLoader, ProjectLoader
-   │
-   ▼  para cada projeto:
- 2. Classificação dos arquivos .. código, legado, views, estáticos, cópia
- 3. Análise da inicialização .... Global.asax, App_Start, Startup OWIN → plano de inicialização
- 4. Configuração ................ web.config/app.config → appsettings*.json + dicas para o Program.cs
- 5. Código C# ................... Roslyn (controllers) + regras de reescrita + regras de detecção
+<nome>.net481/  (ou .net10)
+├── app/src/                    a solução (sln/slnx, projetos, nuget.config, Dockerfiles no .NET 10); working-directory da esteira
+├── infra/
+│   ├── service.yml             1º projeto publicável; os demais em service-<microservico>.yml
+│   ├── lambda-<micro>.yml      só com --serverless
+│   ├── data.yml                o que é da aplicação: RDS, S3, filas, FSx, bucket de artefatos, nomes dos segredos
+│   ├── dev/ hom/ prod/         parameters*.json ({"Parameters": {...}}): VPC, subnets, tamanhos, tags e os valores por ambiente
+│   ├── codedeploy/<micro>/     (framework) appspec.yml + scripts PowerShell do CodeDeploy
+│   ├── deploy.sh / deploy.ps1  aws cloudformation deploy na ordem data → serviços → lambdas
+│   └── README.md               ordem de execução e checklist
+├── tests/testspec-dev.yml      specs dos testes de aceitação (TAAC) da esteira; -hom.yml é idêntico
+├── .github/workflows/deploy.yml  framework: MSBuild em runner Windows → zip → CodeDeploy; net10: buildx linux/arm64 → ECR → ECS
+├── .iupipes.yml                descritor da esteira (language, build em ./app/src, infra.cloudformation, contas por ambiente, sonar, fortify)
+├── .gitattributes, .gitignore, README.md
+├── _secrets/<projeto>/         valores reais das credenciais retiradas; fora do git e do Docker
+└── _migration-report/          relatórios (seção 12)
+```
+
+Contas, sigla, e-mails e os valores dos segredos ficam como placeholders (`PREENCHER`) para serem completados uma vez, no primeiro commit. `--no-infra` desliga `infra/`, `.iupipes.yml`, `tests/` e o workflow; `--output` muda a pasta.
+
+---
+
+## 3. Destino .NET Framework 4.8.1 (padrão)
+
+`migrator migrate App.sln` serve para o caso em que a decisão é sair do datacenter **sem reescrever**.
+
+- **Código intocado.** Cada projeto (C# ou VB.NET, formato antigo ou SDK) é copiado como está; só o `TargetFrameworkVersion` sobe para `v4.8.1` (`net481` em SDK-style) e os marcadores de runtime dos configs (`supportedRuntime`, `httpRuntime`, `compilation targetFramework`) acompanham. `packages.config`, `Global.asax`, Web Forms e `ServiceBase` permanecem; o `.sln` original é copiado para `app/src`.
+- **Proteção mínima.** URLs, e-mails e credenciais fixos no código e nos configs saem para configuração e Secrets Manager ([seção 5](#5-urls-e-mails-e-credenciais-viram-configuração)). Nada mais muda.
+- **Análise completa.** Perfil, dados acessados, modernização (sem os itens `MOD-CS-*`/`MOD-WIN-*`, que só valem para .NET 10/Linux) e arquitetura rodam sobre o código original.
+- **Hospedagem EC2 Windows** para todo projeto publicável: IIS para web, serviço Windows, Agendador de Tarefas para consoles. O relatório traz os pré-requisitos do lift-and-shift (health check para o ALB, `machineKey`, sessão InProc, pastas de rede → FSx, Integrated Security → AD, EWS em desligamento) e, na coluna "Alternativas", a hospedagem que o projeto teria após migrar para .NET 10. Serviços: EC2 + Auto Scaling, ALB, RDS, FSx for Windows ou S3 via File Gateway, Managed AD, Secrets Manager, Systems Manager, CloudWatch agent, CodeDeploy, AWS Backup, VPN.
+- **Sem build de verificação** (`BUILD-FX-SKIPPED`): exige MSBuild no Windows, e o workflow gerado faz isso no runner `windows-latest`.
+
+Itens do inventário: `PRJ-FX-UPGRADE`, `PRJ-FX-CURRENT`, `PRJ-FX-MODERN`, `CFG-FX-RUNTIME`, `CFG-FX-SECRETS`, `WEB-WEBFORMS-KEPT`, `BUILD-FX-SKIPPED`. A última fase do plano gerado é rodar o Migrator de novo com `--target net10`.
+
+---
+
+## 4. Destino .NET 10
+
+`analyze` e `migrate --target net10` executam o mesmo pipeline; `analyze` roda em memória e só grava os relatórios.
+
+```
+ 1. Leitura ..................... .sln/.slnx/.csproj/pasta → projetos (WorkspaceLoader, ProjectLoader)
+    por projeto:
+ 2. Classificação dos arquivos .. código, legado, views, estáticos, configuração, cópia
+ 3. Inicialização ............... Global.asax, App_Start, Startup OWIN → plano para o Program.cs
+ 4. Configuração ................ web.config/app.config → appsettings*.json
+ 5. Código C# ................... Roslyn (controllers, Windows Service) + regras de reescrita + regras de detecção
  6. Views Razor ................. bundles, partials, _ViewImports
- 7. Pacotes NuGet ............... regras + consulta ao nuget.org
- 8. .csproj e Program.cs ........ montagem do projeto SDK-style e do pipeline ASP.NET Core
-   │
-   ▼  para a solução:
+ 7. Pacotes NuGet ............... regras + consulta ao feed
+ 8. .csproj e Program.cs
+    para a solução:
  9. Alinhamento de pacotes ...... versões coerentes entre projetos (evita NU1605)
-10. Gravação da saída ........... cópia migrada + .slnx            (só migrate)
-11. Build de verificação ........ dotnet build por projeto           (só migrate)
-12. Relatórios .................. HTML, Markdown, Excel, CSV
-   (em paralelo, por projeto)
- M. Perfil da aplicação ......... sinais de arquitetura (banco, arquivos, filas, SMTP, sessão, agendamento, Windows...)
- N. Modernização ................ regras de pacotes + regras de código C# + sinais → sugestões
- A. Arquitetura AWS ............. hospedagem por projeto, serviços, Dockerfile, diagrama, plano
+10. Gravação da saída ........... app/src + raiz do repositório                 (só migrate)
+11. Build, testes e smoke ....... dotnet build/test por projeto, GET /health     (só migrate)
+12. Relatórios
+    em paralelo: perfil da aplicação, dados acessados, modernização, arquitetura AWS, infra
 ```
 
-Cada etapa registra o que fez no inventário: o que foi resolvido automaticamente e o que ficou pendente.
+**1. Leitura.** `.sln` (linhas `Project(...)`), `.slnx` (XML), um `.csproj` ou uma pasta (`*.csproj` recursivo, ignorando `bin`, `obj`, `packages`, `node_modules` e saídas anteriores). Do `.csproj` saem propriedades, itens com metadados, `Reference`/`ProjectReference`/`COMReference`, imports, targets, build events, `packages.config` e a porta do IIS Express. Tipo do projeto, na ordem: testes (MSTest/NUnit/xUnit ou GUID) → web (GUID ou `web.config` + Global.asax/MVC/Web API/`.aspx`) → desktop (WinForms/WPF) → Windows Service (`Exe` + `ServiceBase`) → console (`Exe`) → biblioteca. Projetos já SDK-style com `netstandard`/`netcoreapp`/`net5+` só têm o `.csproj` atualizado para `net10.0` (`PRJ-MODERN`). VB.NET, F#, `.sqlproj`, Web Sites: inventariados como não migrados (`PRJ-VB`, `SLN-SKIPPED`).
 
-### 1. Leitura da aplicação
+**2. Classificação.** Só os itens do `.csproj` entram (arquivos esquecidos no disco quebrariam o build SDK-style; são listados no inventário).
 
-- **Entrada**: `.sln` (lê as linhas `Project(...)`), `.slnx` (XML), um `.csproj` isolado ou uma pasta (procura `*.csproj` recursivamente, ignorando `bin`, `obj`, `packages`, `node_modules` e saídas anteriores do Migrator).
-- **Projetos não C#** (`.vbproj`, `.fsproj`, `.sqlproj`, `.wixproj`, Web Sites) são listados como "não migrados", com o motivo.
-- **Leitura do `.csproj`** (formato antigo ou SDK-style): propriedades (`TargetFrameworkVersion`, `OutputType`, `RootNamespace`, `PlatformTarget`, `DefineConstants`, assinatura), todos os itens de arquivo com seus metadados, `Reference` (GAC ou com `HintPath`), `ProjectReference`, `COMReference`, `Import` e `Target` customizados, build events, `packages.config` e a URL do IIS Express.
-- **Tipo do projeto** (a primeira regra que bater vence):
-
-| Tipo | Como é detectado |
-|---|---|
-| Testes | referência a MSTest/NUnit/xUnit ou GUID de projeto de teste |
-| Web | GUID de Web Application ou `web.config` + (`Global.asax`, MVC, Web API ou `.aspx`) |
-| Desktop | referência a `System.Windows.Forms` ou WPF |
-| Windows Service | `Exe` + `System.ServiceProcess` + classe `: ServiceBase` |
-| Console | `OutputType` `Exe`/`WinExe` |
-| Biblioteca | demais casos |
-
-Projetos que **já são** SDK-style com `netstandard`/`netcoreapp`/`net5+` não passam pelas reescritas de código, mas o `.csproj` é atualizado: monikers do .NET Framework saem de listas multi-target, `netcoreapp`/`net5+`/`netstandard` viram `net10.0` (preservando sufixos como `-windows`) e os pacotes `Microsoft.*` são alinhados à linha 10.0 (`PRJ-MODERN`).
-
-### 2. Classificação dos arquivos
-
-Apenas os arquivos que pertencem ao `.csproj` são considerados. Projetos SDK-style incluem tudo o que estiver na pasta, então arquivos esquecidos no disco quebrariam o build; por isso eles não são copiados, mas são listados no inventário.
-
-| Papel | Quais arquivos | Destino |
+| Papel | Arquivos | Destino |
 |---|---|---|
 | Código | `.cs` | transformado (etapa 5) |
-| Legado | `Global.asax.cs`; `App_Start/*.cs` que usam System.Web/OWIN/Unity/Ninject; Startup OWIN (`IAppBuilder`); `AreaRegistration`; code-behind de WebForms; instaladores `[RunInstaller]` | `_Legacy/` (fora do build, para consulta) |
-| WebForms | `.aspx`, `.ascx`, `.master`, `.ashx`, `.asmx`, `.svc` | `_Legacy/` |
+| Legado | `Global.asax.cs`, `App_Start/*.cs` com System.Web/OWIN/DI, Startup OWIN, `AreaRegistration`, code-behind, instaladores | `_Legacy/` (fora do build) |
+| Web Forms | `.aspx`, `.ascx`, `.master`, `.ashx`, `.asmx`, `.svc` | `_Legacy/` + `WEB-WEBFORMS` com estimativa de reescrita |
 | Views | `.cshtml` | transformadas (etapa 6) |
-| Estáticos (web) | arquivos em `Content`, `Scripts`, `fonts`, `Images`, `css`, `js`, `lib`... e `favicon.ico`/`robots.txt` | `wwwroot/` (as URLs `~/Content/...` continuam válidas) |
-| Configuração | `web.config`, `app.config`, `Web.*.config`, `Views/web.config`, `packages.config` | não copiados; convertidos (etapas 4 e 6) |
-| Demais | qualquer outro item do projeto | copiado como está |
+| Estáticos | `Content`, `Scripts`, `fonts`, `Images`, `css`, `js`, `lib`, `favicon.ico`, `robots.txt` | `wwwroot/` (URLs `~/Content/...` continuam válidas) |
+| Configuração | `web.config`, `app.config`, `Web.*.config`, `Views/web.config`, `packages.config` | convertidos (etapas 4 e 6) |
+| Demais | qualquer outro item | copiado |
 
-Arquivos `.cs` linkados de fora da pasta do projeto (`<Compile Include="..\Shared\X.cs">`) são copiados e transformados se estiverem dentro da solução. Os arquivos `.cs` são lidos respeitando BOM, e os salvos em ANSI (Windows-1252) são convertidos para UTF-8 sem perder a acentuação.
+Arquivos linkados de fora do projeto são copiados se estiverem dentro da solução; ANSI (Windows-1252) vira UTF-8 sem perder acentos.
 
-### 3. Análise da inicialização (projetos web)
+**3. Inicialização.** Lido com Roslyn dos arquivos legados: rotas do `RouteConfig` e das áreas (`UrlParameter.Optional` → `{id?}`, constraints, `LowercaseUrls`), template e CORS do `WebApiConfig`, filtros globais do `FilterConfig`, registros de Unity/Ninject → `AddTransient/Scoped/Singleton`, eventos do `Global.asax` (`Application_Error`, `BeginRequest`, `Session_Start`... viram itens com a alternativa) e cada `app.UseXxx()` do OWIN.
 
-Os arquivos legados são lidos com Roslyn para extrair um **plano de inicialização**, usado depois no `Program.cs`:
-
-| Origem | O que é extraído |
-|---|---|
-| `RouteConfig` (`routes.MapRoute`) | nome, URL, defaults (`UrlParameter.Optional` → `{id?}`), constraints (regex ancoradas), `LowercaseUrls` |
-| `AreaRegistration` | rotas de área → `MapAreaControllerRoute` |
-| `WebApiConfig` | template da rota (`api/{controller}/{id}` → `api/[controller]`), CORS (`EnableCorsAttribute`), camelCase do JSON, remoção do formatter XML |
-| `FilterConfig` | `RequireHttps`, `Authorize` global; filtros customizados viram TODO |
-| `UnityConfig`, `NinjectWebCommon` | `RegisterType<I, C>()` e `Bind<I>().To<C>()` → `AddTransient`/`AddScoped`/`AddSingleton` conforme o lifetime |
-| `Global.asax.cs` | instruções desconhecidas do `Application_Start` (viram comentários TODO); eventos `Application_Error`, `BeginRequest`, `AuthenticateRequest`, `Session_Start`... (itens do inventário com a alternativa) |
-| Startup OWIN | cada `app.UseXxx()` vira um item com o equivalente no ASP.NET Core |
-
-### 4. Configuração (`web.config`/`app.config` → `appsettings.json`)
+**4. Configuração.**
 
 | No config | Resultado |
 |---|---|
-| `<appSettings>` | `appsettings.json` → `"AppSettings"`; chaves de infraestrutura (`webpages:*`, `ClientValidationEnabled`...) descartadas; `file=` e `configSource=` incorporados |
-| `<connectionStrings>` | `"ConnectionStrings"`; avisos para EDMX (`metadata=`), `|DataDirectory|` e providers não SQL Server |
-| `Web.Release.config`, `App.Debug.config`... | `appsettings.Production.json`, `appsettings.Development.json`... (transformações de `appSettings`/`connectionStrings`) |
-| seções customizadas (`<configSections>`) | convertidas de XML para JSON (atributos → propriedades, `<add key value>` → dicionário) |
-| `<applicationSettings>` (Settings.settings) | `"ApplicationSettings"`; em projetos não-web o `App.config` é mantido para `Properties.Settings.Default` continuar funcionando |
-| `<system.serviceModel><client>` | `"WcfClient:Endpoints"` (endereços para criar o cliente em código) |
-| `<system.net><mailSettings>` | `"Smtp"` |
-| `<log4net>` / `<nlog>` | `log4net.config` / `nlog.config`, copiados para a saída |
-| `<authentication mode="Forms">` | cookie authentication no `Program.cs` (loginUrl, timeout, nome do cookie) |
-| `<authentication mode="Windows">` | `AddNegotiate()` + pacote Negotiate |
-| `<authorization><deny users="?">` | `FallbackPolicy` exigindo usuário autenticado |
-| `<sessionState>` | `AddSession`/`UseSession` com o mesmo timeout |
-| `<globalization culture="pt-BR">` | `app.UseRequestLocalization("pt-BR")` |
-| `maxRequestLength` / `maxAllowedContentLength` | limites do Kestrel, IIS e `FormOptions` |
-| `<customErrors defaultRedirect>` | `UseExceptionHandler(...)` |
-| `<httpCookies>` | `CookiePolicyOptions` |
-| `<system.webServer>` (rewrite, headers, mime, limites) | preservado num `web.config` mínimo para o IIS (o publish acrescenta o handler do ASP.NET Core) |
-| `httpModules`/`handlers` customizados, `machineKey`, providers de Membership, `<location>`, WIF... | itens do inventário com a alternativa |
-| `<runtime>` (binding redirects), `<system.codedom>`, `<startup>` | descartados (não se aplicam) |
+| `<appSettings>`, `<connectionStrings>` | `"AppSettings"`, `"ConnectionStrings"` (chaves de infraestrutura descartadas; `file=`/`configSource=` incorporados; avisos para EDMX, `\|DataDirectory\|` e providers não SQL Server) |
+| `Web.Release.config`, `App.Debug.config`... | `appsettings.Production.json`, `appsettings.Development.json`... |
+| seções customizadas, `<applicationSettings>`, `<system.serviceModel><client>`, `<mailSettings>` | JSON (`"ApplicationSettings"`, `"WcfClient:Endpoints"`, `"Smtp"`); em projetos não-web o `App.config` é mantido para `Settings.Default` |
+| `<log4net>`, `<nlog>` | `log4net.config` / `nlog.config` |
+| Forms Authentication, Windows Auth, `<authorization>`, `<sessionState>`, `<globalization>`, limites de upload, `<customErrors>`, `<httpCookies>` | cookie auth, `AddNegotiate()`, `FallbackPolicy`, `AddSession`, `UseRequestLocalization`, limites do Kestrel/IIS/`FormOptions`, `UseExceptionHandler`, `CookiePolicyOptions` no `Program.cs` |
+| `<system.webServer>` (rewrite, headers, mime) | `web.config` mínimo para o IIS |
+| `httpModules`/`handlers`, `machineKey`, Membership, `<location>`, WIF | itens do inventário com a alternativa |
+| `<runtime>`, `<system.codedom>`, `<startup>` | descartados |
 
-Senhas e chaves copiadas geram um alerta para movê-las para User Secrets, variáveis de ambiente ou Key Vault.
+**5. Código C#.** Para cada arquivo, nesta ordem: (a) `LiteralExternalizer` ([seção 5](#5-urls-e-mails-e-credenciais-viram-configuração)); (b) **Roslyn**: controllers Web API, mesmo herdando de base própria, ganham `ControllerBase`, `[ApiController]`, `[Route("api/[controller]")]` do template do `WebApiConfig`, verbo explícito por convenção de nome (`GetX` → `[HttpGet]`), `{id}` quando há parâmetro `id`, `HttpResponseMessage` → `IActionResult`; `HttpContext.Current` → `HttpContext` em controllers; `[Area("X")]` por pasta; classes `: ServiceBase` viram `: BackgroundService` (`OnStart` → `ExecuteAsync`, `OnStop` → `StopAsync`) com `Program.cs` de generic host, `AddWindowsService()` e `AddHostedService<T>()`; (c) **regras de reescrita**: usings `System.Web.*` → `Microsoft.AspNetCore.*`, `IHttpActionResult`/`HttpNotFound()`/`[FromUri]`/`[RoutePrefix]`/`[ResponseType]`/`HttpPostedFileBase`/`MvcHtmlString`/`[OutputCache]`/`Request.IsAjaxRequest()` e afins para os equivalentes do ASP.NET Core, `ConfigurationManager.AppSettings["X"]` → `configuration["AppSettings:X"]`, `System.Data.SqlClient` → `Microsoft.Data.SqlClient`, `XmlConfigurator.Configure()` apontando para o `log4net.config`; (d) **injeção de `IConfiguration`** sem intervenção na classe do `Main` de consoles (campo estático com `ConfigurationBuilder`: appsettings + ambiente + variáveis de ambiente) e nos `BackgroundService`s convertidos (construtor); nas demais classes fica o item `CFG001` e o erro de build aponta o lugar; (e) **regras de detecção** sobre o código já transformado (`Data/CodeRules.cs`): `HttpContext.Current` fora de controllers, `Server.MapPath`, `Session[...]`, `FormsAuthentication`, filtros customizados, `IHttpModule`, child actions, `BinaryFormatter`, `Thread.Abort`, Remoting, hospedagem WCF, `WebClient`, `SmtpClient`, `DbContext("name=...")`...
 
-### 5. Código C#
+**6. Views Razor.** `@Scripts.Render`/`@Styles.Render` expandidos a partir do `BundleConfig.cs` (com `asp-append-version`, resolvendo `{version}`, `*` e `IncludeDirectory`); `@Html.Partial` → `@await Html.PartialAsync`; `Json.Encode` → `JsonSerializer.Serialize`; `_ViewImports.cshtml` a partir dos `Views/web.config`. Itens manuais: `@helper`, `@Ajax.*`, `Html.Action`, `WebGrid`, `@inherits WebViewPage`.
 
-Três passos, nesta ordem, para cada arquivo:
+**7. Pacotes NuGet.** Com regra em `Data/PackageRules.cs`: `Remove` (já faz parte do .NET, conteúdo client-side, `.pt-br`), `Replace` (ex.: `Microsoft.Owin.Security.Jwt` → `JwtBearer`), `Manual` (item bloqueante: Unity, Identity 2, SignalR clássico, ELMAH) ou `Keep` com política de versão. Sem regra: consulta ao feed (pastas `lib/<tfm>`): compatível → mantém na última da mesma major; só .NET Framework → sobe (atenção); nenhuma compatível → mantém + bloqueante (NU1701); inexistente → "feed privado?". Políticas: "linha 10.0" para Microsoft.Extensions/EF Core/ASP.NET Core, "última da major N" (EF6 → 6.x) e tetos de licença (AutoMapper < 15, MediatR < 13, FluentAssertions < 8, EPPlus < 5, MassTransit < 9). Pacotes entram conforme o código usa (`NewtonsoftJson` em Web API, `Microsoft.Data.SqlClient`, `System.ServiceModel.*`, `System.Drawing.Common`, `Microsoft.NET.Test.Sdk`...); referências do GAC viram pacote só se o namespace é usado; DLLs locais são copiadas e inspecionadas (framework alvo, dependência de `System.Web`). `--offline` mantém as versões e marca como não verificadas.
 
-1. **Reescrita de controllers (Roslyn).** A ferramenta monta um catálogo de herança de todo o projeto e detecta controllers mesmo quando herdam de uma base própria (`MeuApiBase : ApiController`). Em cada controller Web API ela:
-   - troca `ApiController` → `ControllerBase` e adiciona `[ApiController]`, o que preserva o binding do Web API (tipos complexos vêm do corpo JSON);
-   - adiciona `[Route("api/[controller]")]` a partir do template do `WebApiConfig`, porque `[ApiController]` exige rota por atributo;
-   - explicita o verbo de cada action pela convenção de nomes do Web API (`GetX` → `[HttpGet]`, sem prefixo → `[HttpPost]`) e adiciona `{id}` quando há parâmetro `id`;
-   - troca o retorno `HttpResponseMessage` → `IActionResult` e `Json(x)` → `new JsonResult(x)`;
-   - detecta rotas que ficariam ambíguas no ASP.NET Core.
+**8. `.csproj` e `Program.cs`.** SDK `Web`/`Razor`/`Sdk` com `net10.0` (`-windows` para desktop), `Nullable` e `ImplicitUsings` desligados, `AssemblyInfo.cs` preservado, `PlatformTarget`/`DefineConstants`/assinatura/ícone mantidos, `Compile Remove="_Legacy\**"`, `FrameworkReference` para bibliotecas que usavam MVC/Http, targets e build events convertidos. O `Program.cs` web junta o plano da etapa 3 com as dicas da etapa 4, mais `/health`, `UseForwardedHeaders` e cultura padrão; o que não pôde ser convertido vira `// TODO Migrator`. `launchSettings.json` mantém a porta do IIS Express.
 
-   Em controllers MVC e Web API, `HttpContext.Current` vira a propriedade `HttpContext`. Controllers em `Areas/X/Controllers` ganham `[Area("X")]`.
-2. **Reescrita por regras.** Usings `System.Web.*` → `Microsoft.AspNetCore.*` (namespaces sem equivalente ficam comentados) e trocas de tipos e APIs:
+**9. Alinhamento.** A solução é percorrida em ordem de dependência elevando versões diretas quando um pacote adicionado ou um projeto referenciado exige mais (evita NU1605).
 
-   | Antes | Depois |
-   |---|---|
-   | `IHttpActionResult`, `HttpStatusCodeResult`, `HttpNotFound()` | `IActionResult`, `StatusCodeResult`, `NotFound()` |
-   | `Request.CreateResponse(HttpStatusCode.X, v)`, `StatusCode(HttpStatusCode.X)` | `StatusCode((int)HttpStatusCode.X, v)` |
-   | `[FromUri]`, `[RoutePrefix]`, `[ResponseType]`, `[Bind(Include=...)]` | `[FromQuery]`, `[Route]`, `[ProducesResponseType]`, `[Bind(...)]` |
-   | `HttpPostedFileBase`, `HttpContextBase`, `MvcHtmlString`, `this HtmlHelper` | `IFormFile`, `HttpContext`, `HtmlString`, `this IHtmlHelper` |
-   | `Json(x, JsonRequestBehavior.AllowGet)` | `Json(x)` |
-   | `[OutputCache(Duration=60, VaryByParam="id")]` | Output Caching do ASP.NET Core (+ `AddOutputCache`/`UseOutputCache`) |
-   | `Request.IsAuthenticated`, `Request.QueryString[..]`, `Request.Files`, `Request.IsAjaxRequest()` | equivalentes do ASP.NET Core |
-   | `[AllowHtml]`, `[ValidateInput(false)]` | removidos (não há request validation) |
-   | `ConfigurationManager.AppSettings["X"]` / `.ConnectionStrings["Y"].ConnectionString` | `configuration["AppSettings:X"]` / `configuration.GetConnectionString("Y")` |
-   | `System.Data.SqlClient` | `Microsoft.Data.SqlClient` |
-   | `XmlConfigurator.Configure()` (log4net) | aponta para o `log4net.config` extraído |
+**10. Gravação.** Pasta de saída fora da origem; se já existir, só é substituída com `--force` e se tiver o marcador `.migrator-output`. Um `.slnx` com os projetos migrados, `nuget.config`, `.editorconfig` e `Directory.Build.*` vão para `app/src`.
 
-   Os usings necessários (`Mvc.Filters`, `Mvc.Rendering`, `Http`, `Authorization`, `OutputCaching`...) são adicionados conforme os tipos usados no arquivo.
-3. **Regras de detecção** (`Data/CodeRules.cs`). Rodam sobre o código já transformado e geram os itens manuais, com arquivo, linha da primeira ocorrência e contagem. Exemplos: `HttpContext.Current` fora de controllers, `Server.MapPath`, `Session[...]`, `FormsAuthentication`, filtros customizados, `IHttpModule`, child actions, `BinaryFormatter`, `Thread.Abort`, AppDomains, Remoting, hospedagem WCF, `WebClient`, `SmtpClient`, `DbContext("name=...")` e `CreatedAtRoute("DefaultApi")`.
+**11. Build, testes e smoke.** `dotnet build` por projeto em ordem topológica; dependência que falhou bloqueia os dependentes (`BUILD-BLOCKED`). Erros de compilação, restore (NU1101, NU1605), compatibilidade (NU1701, CA1416), APIs obsoletas (SYSLIB*) e vulnerabilidades (NU1902–NU1904) viram itens com arquivo, linha e dica de `Data/BuildHints.cs`. O compilador só mostra erros de corpo de método depois que os de declaração somem; as regras de detecção da etapa 5 antecipam as camadas seguintes. Depois do build: projetos de teste rodam com `dotnet test` (`TEST-RUN`/`TEST-FAILED`), apps web sobem em porta aleatória e recebem `GET /health` (`SMOKE-OK`/`SMOKE-FAILED`), e com `--verify-docker` as imagens são construídas (`DOCKER-*`). `--no-build`, `--no-tests` e `--no-smoke` desligam cada etapa; `--build-timeout` limita o build.
 
-Durante essas etapas a ferramenta também levanta "fatos" sobre o código (usa SqlClient? WCF client? `System.Drawing`? `EventLog`? APIs de `System.Configuration` que sobraram?). Eles decidem quais pacotes adicionar e se o `App.config` precisa ser mantido.
-
-### 6. Views Razor
-
-- `@Scripts.Render("~/bundles/x")` e `@Styles.Render(...)` são expandidos em `<script>`/`<link>` com `asp-append-version`, a partir do `BundleConfig.cs`. São resolvidos `{version}`, `*` e `IncludeDirectory`, e ficam de fora `.min`, `-vsdoc`, `.intellisense` e `.map`, como no bundling original.
-- `@Html.Partial` → `@await Html.PartialAsync`, `Html.RenderPartial` → `RenderPartialAsync`, `Json.Encode` → `JsonSerializer.Serialize`, `Request.IsAuthenticated` → `User.Identity.IsAuthenticated`, `@using System.Web.*` removidos, `@model HandleErrorInfo` removido.
-- `_ViewImports.cshtml` é gerado a partir dos `<namespaces>` de cada `Views/web.config` (inclusive das áreas), com Tag Helpers habilitados.
-- Itens manuais: `@helper`, `@Ajax.*`, `Html.Action` (child actions), `EnumDropDownListFor`, `WebGrid`, `@inherits WebViewPage`.
-
-### 7. Pacotes NuGet
-
-Para cada pacote do `packages.config`/`PackageReference`:
-
-```
-há regra em Data/PackageRules.cs?
- ├─ Remove   → removido (já faz parte do .NET/ASP.NET Core, conteúdo client-side, idioma .pt-br, ferramenta de build)
- ├─ Replace  → trocado pelo equivalente (ex.: Microsoft.Owin.Security.Jwt → Microsoft.AspNetCore.Authentication.JwtBearer)
- ├─ Manual   → removido + item bloqueante (ex.: Unity, Identity 2, SignalR clássico, ELMAH)
- └─ Keep     → mantido com a política de versão da regra
-não há regra → consulta ao nuget.org (pastas lib/<tfm> do pacote):
- ├─ versão atual compatível → mantém, atualizando para a última da mesma versão major
- ├─ só tem binários .NET Framework → sobe para a versão mais recente compatível (item de atenção)
- ├─ nenhuma versão compatível → mantém + item bloqueante (NU1701 no build)
- └─ não existe no nuget.org → mantém + item "feed privado?"
-```
-
-- Políticas de versão: "mesma se compatível", "linha 10.0 do .NET" (Microsoft.Extensions.*, EF Core, ASP.NET Core), "última da major N" (EF6 → 6.x) e limites de licença (AutoMapper < 15, MediatR < 13, FluentAssertions < 8, EPPlus < 5, MassTransit < 9).
-- Pacotes adicionados conforme os fatos do código: `Microsoft.AspNetCore.Mvc.NewtonsoftJson` (Web API), `System.ServiceProcess.ServiceController` (Windows Service), `System.Configuration.ConfigurationManager`, `Microsoft.Extensions.Configuration.*`, `Microsoft.Data.SqlClient`, `System.ServiceModel.*` (cliente WCF), `System.Drawing.Common`, `System.Diagnostics.EventLog`, `System.Runtime.Caching`, `Microsoft.NET.Test.Sdk` e o adapter de testes.
-- Referências do GAC (`System.Management`, `System.DirectoryServices`...) viram pacotes **somente se o código usa o namespace**; referências padrão de template sem uso são descartadas.
-- DLLs locais (`HintPath`) são copiadas e inspecionadas pelo metadata: a ferramenta identifica o framework para o qual foram compiladas e se dependem de `System.Web`.
-- Com `--offline`, as versões originais são mantidas e marcadas como "não verificadas".
-
-### 8. `.csproj` e `Program.cs`
-
-O `.csproj` gerado usa o SDK `Microsoft.NET.Sdk.Web` (web), `Microsoft.NET.Sdk.Razor` (biblioteca com views) ou `Microsoft.NET.Sdk`, com `net10.0` (ou `net10.0-windows` para Windows Service e desktop). Contém:
-
-- `Nullable` e `ImplicitUsings` desligados, `GenerateAssemblyInfo=false` quando existe `AssemblyInfo.cs`, e `Deterministic=false` quando a versão usa curinga (`1.0.*`);
-- propriedades preservadas: `PlatformTarget`, `DefineConstants`, assinatura, ícone e `StartupObject`;
-- `ProjectReference` (caminhos relativos mantidos) e `Reference` com `HintPath`;
-- itens com tipo diferente do padrão do SDK: recursos embutidos não-`.resx`, `Content` que precisa ir para o publish e metadados de designer (`Generator`, `DependentUpon`...);
-- `Compile Remove="_Legacy\**"`;
-- `FrameworkReference Microsoft.AspNetCore.App` para bibliotecas que usavam System.Web.Mvc/Http;
-- targets, imports e `COMReference` customizados; build events convertidos em targets, com fallback de `$(SolutionDir)`.
-
-Para projetos web é gerado o `Program.cs` com o plano da etapa 3 e as dicas da etapa 4, além de `Properties/launchSettings.json` com a mesma porta do IIS Express. O que não pôde ser convertido aparece como comentário `// TODO Migrator`.
-
-### 9. Alinhamento de pacotes
-
-Depois de planejar todos os projetos, a ferramenta percorre a solução em ordem de dependência e eleva versões diretas quando um pacote adicionado exige mais (ex.: `NewtonsoftJson 10.0.x` exige `Newtonsoft.Json >= 13.0.3`) ou quando um projeto referenciado usa versão maior. Sem isso o restore falharia com NU1605 (downgrade).
-
-### 10. Gravação da saída (somente `migrate`)
-
-- **Pasta de saída**: `<pasta-pai>\<nome-da-solução>.net10`. Ela não pode ficar dentro da origem nem contê-la.
-- **Proteção de pastas**: se a pasta já existir com conteúdo, o Migrator só a substitui com `--force` e apenas se ela tiver o marcador `.migrator-output`, ou seja, se tiver sido criada pela própria ferramenta.
-- **Arquivos gerados**: um `.slnx` com os projetos migrados; são copiados `NuGet.config`, `.editorconfig` e `Directory.Build.*`.
-
-### 11. Build de verificação (somente `migrate`)
-
-- **Ordem de compilação**: cada projeto é compilado com `dotnet build` em ordem topológica, começando pelas bibliotecas. Um projeto cuja dependência falhou não é compilado e aparece como **bloqueado**. Assim, um pacote privado ausente num projeto não esconde os erros dos outros.
-- **Erros no inventário**: erros de compilação, restore (NU1101, NU1605), compatibilidade (NU1701, CA1416), APIs obsoletas (SYSLIB*) e vulnerabilidades (NU1902–NU1904) viram itens com arquivo, linha e uma sugestão de `Data/BuildHints.cs` (ex.: `CS0246 'HttpPostedFileBase'` → "use IFormFile").
-- **Log completo**: fica em `build-verification.log`.
-
-> O compilador C# só aponta erros dentro dos métodos depois que os erros de declaração (tipos, atributos, assinaturas) são resolvidos. O build mostra a primeira camada; as regras de detecção da etapa 5 já antecipam as seguintes.
-
-### 11b. Verificação de runtime (somente `migrate`)
-
-Compilar não é funcionar. Depois do build de verificação, para os projetos que compilaram:
-
-- **Projetos de teste** são executados com `dotnet test` (`TEST-RUN` / `TEST-FAILED`, com os nomes dos testes que falharam). Testes que passavam no .NET Framework e falham no .NET 10 costumam revelar mudanças de comportamento (cultura, fuso, caminhos, serialização).
-- **Aplicações web** são iniciadas em uma porta aleatória e recebem um `GET /health` (`SMOKE-OK` / `SMOKE-FAILED` com a saída do processo). Falhas aqui são quase sempre registros de DI faltando ou configuração ausente, e aparecem antes do primeiro deploy.
-- Com `--verify-docker`, as imagens dos Dockerfiles gerados são construídas no Docker local (`DOCKER-OK` / `DOCKER-FAILED`).
-
-`--no-tests` e `--no-smoke` desligam as duas primeiras etapas. O resultado aparece na coluna Build dos relatórios ("OK · testes 12/12 · /health OK").
-
-### 12. Relatórios
-
-| Arquivo | Uso |
-|---|---|
-| `migration-report.html` | relatório navegável: resumo, tabela de projetos, filtros por severidade e busca, erros de build agrupados por código |
-| `migration-report.md` | versionar no repositório, anexar em PR ou wiki |
-| `inventory.xlsx` | abas Resumo, Inventário, Modernização e Arquitetura AWS, com filtros, para estimar e distribuir o trabalho |
-| `inventory.csv` | integração com outras ferramentas (UTF-8 com BOM) |
-| `modernization.csv` | sugestões de modernização e arquitetura (tipo, impacto, esforço, evidência, serviço AWS) |
-| `data-access.csv` | bancos, tecnologia, tabelas/procedures, campos, operações, forma de acesso e localização (aba "Dados acessados" no Excel) |
-| `migration-result.json` | resultado completo em JSON (inventário, modernização, arquitetura, hospedagem, bancos, hosts internos) |
-| `build-verification.log` | saída completa do build |
-| `infra/` e `.github/workflows/deploy.yml` (na saída) | Terraform (ou CloudFormation com `--iac cloudformation` / `--target framework`) da arquitetura proposta e pipeline de deploy |
-| `_secrets/<projeto>/` (na saída, fora do git/Docker) | credenciais retiradas do appsettings: `appsettings.Secrets.json`, template, scripts do Secrets Manager, bloco da task definition, user-secrets |
-
----
-
-## Dados acessados (bancos, tabelas e campos)
-
-Em qualquer modo (`analyze`, `migrate`, `portfolio`, com ou sem `--cloud`) o relatório traz a seção **"Dados acessados"**: para cada banco, a tecnologia e a lista de tabelas, views e procedures que o código toca, com os campos, as operações, a forma de acesso, os projetos e o arquivo:linha. É o que o negócio e o DBA precisam para decidir o que migrar para o RDS e o que fica.
-
-Fontes (`Analysis/DataAccessAnalyzer`, análise estática):
-
-| Fonte | O que extrai |
-|---|---|
-| SQL em literais C#/VB (inclusive concatenações `"SELECT a, b " + "FROM T " + ...`, strings verbatim e interpoladas) e arquivos `.sql` do projeto | tabelas de `FROM`/`JOIN`/`INSERT INTO`/`UPDATE ... SET`/`DELETE`/`MERGE`/`TRUNCATE`, procedures de `EXEC`; colunas da lista do `SELECT`, do `INSERT (...)`, dos `SET`, do `WHERE`/`ON`/`ORDER BY`/`GROUP BY`; aliases resolvidos; CTEs, tabelas temporárias e `sys.*` ignorados; nomes de três partes (`Banco.dbo.Tabela`) fixam o banco |
-| ADO.NET | `reader["Coluna"]`, `GetOrdinal("Coluna")`, `leitor("Coluna")` (VB) ligados ao comando mais próximo; `CommandType.StoredProcedure` + `Parameters.AddWithValue("@p")` |
-| Dapper | `Query/Execute("sql")` e `commandType: CommandType.StoredProcedure` |
-| EF6 / EF Core | `DbSet<T>` → tabela (`ToTable`/`[Table]`, senão convenção: plural do tipo no EF6, nome do DbSet no EF Core); colunas = propriedades públicas da entidade (em qualquer projeto da solução), com `HasColumnName`/`[Column]`, sem `[NotMapped]`/`Ignore`/navegações; `SaveChanges` marca escrita |
-| EDMX | `EntitySet`/`EntityType` do modelo de armazenamento e `Function` (procedures) |
-
-O banco de cada tabela é resolvido nesta ordem: nome de três partes no SQL → nome da connection string citada no arquivo (`ConnectionStrings["X"]`, `name=X` no `DbContext`) → banco único conhecido pelo projeto, pelos projetos que o hospedam (uma biblioteca usa a connection string da web/console que a referencia) ou pelas dependências. Quando sobra ambiguidade a linha fica como "não identificado (candidatos: ...)" e marcada em amarelo no Excel. A seção é documental: não entra no `AutomationPercent` nem no código de saída.
-
----
-
-## Destino .NET Framework 4.8.1 (o padrão, sem migrar o código)
-
-`migrator migrate App.sln` (ou `--target framework`, o padrão) serve para o caso em que a decisão é tirar a aplicação do datacenter **agora**, sem reescrever nada. A migração de código para .NET 10 é `--target net10`.
-
-- **Código intocado.** Cada projeto é copiado como está (C# e VB.NET, old-style ou SDK); só o `TargetFrameworkVersion` sobe para `v4.8.1` (`net481` em SDK-style) e os marcadores de runtime dos configs (`supportedRuntime`, `httpRuntime`/`compilation targetFramework`) acompanham. `packages.config`, `Global.asax`, Web Forms, `ServiceBase`, tudo permanece; o `.sln` original é copiado. A saída padrão é `<nome>.net481`. Itens: `PRJ-FX-UPGRADE`, `CFG-FX-RUNTIME`, `CFG-FX-SECRETS` (senhas continuam no config: o CodeDeploy as injeta), `WEB-WEBFORMS-KEPT`, `BUILD-FX-SKIPPED` (o build de verificação exige MSBuild no Windows; o workflow gerado faz isso).
-- **Análise completa.** Perfil, inventário de dados acessados, sugestões de modernização (sem os itens `MOD-CS-*`/`MOD-WIN-*`, que só valem para .NET 10/Linux) e arquitetura rodam normalmente sobre o código original.
-- **Hospedagem: EC2 Windows** para todo projeto publicável (IIS para web, serviço Windows, Agendador de Tarefas para consoles), com a justificativa, os pré-requisitos do lift-and-shift (health check para o ALB, `machineKey`, sessão InProc, pastas de rede → FSx/File Gateway, segredos, Integrated Security → AD, EWS em desligamento) e, na coluna "Alternativas", **a hospedagem que o mesmo projeto teria após migrar para .NET 10** (ECS Fargate, Lambda...). Assim o relatório não contradiz a análise da trilha .NET 10: são duas respostas para duas decisões.
-- **Serviços**: EC2 + Auto Scaling, ALB, RDS, FSx for Windows (pastas UNC) / S3 via File Gateway, Managed AD quando há identidade Windows, Secrets Manager, Systems Manager, CloudWatch agent, CodeDeploy, AWS Backup, VPN. Fases, riscos (licença Windows, 4.x → 4.8.1, EWS, MSMQ local, sessão) e custo seguem o mesmo formato.
-- **Proteção mínima obrigatória**: credenciais fixas no código e nos configs saem para `_secrets/` e para o Secrets Manager (veja a seção seguinte); o restante do código não muda.
-- **Infraestrutura em CloudFormation** no layout da plataforma: veja [Infraestrutura como código](#infraestrutura-como-código-e-cicd).
-
-A modernização para .NET 10 continua disponível (`--target net10`) e a última fase do plano gerado é justamente rodar o Migrator de novo com ela.
-
----
-
-## URLs, e-mails e credenciais fixos viram configuração
-
-Em qualquer destino, antes de qualquer outra reescrita, `Migration/LiteralExternalizer` troca literais C# por leitura de configuração:
-
-| Literal | Vira | Onde fica o valor |
-|---|---|---|
-| `"https://erp.exemplo.com.br/api"` | `ConfigurationManager.AppSettings["Urls:ErpProtocoloUrl"]` (no .NET 10 o pipeline transforma em `configuration["AppSettings:Urls:ErpProtocoloUrl"]`) | `app/web.config` ou `appsettings.json` **e** um parâmetro da infra por ambiente |
-| `"suporte@exemplo.com.br"` | `AppSettings["Emails:EmailSuporte"]` | idem |
-| `const string Token = "erp-9f3b..."`, connection string com `Password=`, `AKIA...` | `AppSettings["Credenciais:Token"]` com marcador `<secret: nome>` no config | valor real em `_secrets/<projeto>/` (fora do git), nome no Secrets Manager, referência na infra |
-
-A chave vem do identificador atribuído (`ErpProtocoloUrl`), senão do host/parte local do e-mail; `const` vira `static readonly`. Literais em atributos, `case`, valores padrão de parâmetro e strings interpoladas/verbatim não são reescritos e aparecem em `CS-CONFIG-SKIPPED`. Itens: `CS-CONFIG-EXTERNALIZED`, `CS-SECRET-EXTERNALIZED`. No destino framework o `.csproj` ganha a referência a `System.Configuration` quando falta.
-
-Os `appSettings` com URL/e-mail também viram parâmetros, com o valor por ambiente que os `Web.Debug.config`/`Web.Release.config` já declaravam (`ConfigSettingsCollector`). Na infra: parâmetros do template com um valor por ambiente em `infra/<env>/parameters.json`; o EC2 recebe pelo Parameter Store (`/<feature>/<env>/...`, gravado no appSettings pelo `after-install.ps1` do CodeDeploy), o ECS/Lambda por variável de ambiente `AppSettings__Secao__Chave`. Segredos nunca passam por template ou parâmetro: `data.yml` cria os nomes (`SecretString: PREENCHER`) e `_secrets/<projeto>/create-secrets.sh` coloca os valores.
-
----
-
-## Modernização e arquitetura AWS
-
-Enquanto migra, a ferramenta monta um **perfil** de cada projeto a partir do código original, dos pacotes, das referências de framework e do `web.config`/`app.config`: que banco usa (e se a connection string usa Integrated Security), se grava arquivos em disco ou em pastas de rede, se consome MSMQ/RabbitMQ, se envia e-mail por SMTP, se guarda sessão em memória ou estado em coleções estáticas, se tem timers/agendadores, que autenticação usa, se depende de componentes Windows (COM, Registro, System.Drawing, Event Log, WMI, Crystal Reports...), se tem segredos em texto claro e quais hosts internos acessa. Bibliotecas são **fundidas** nos projetos que as referenciam, então a recomendação de um site considera o que as DLLs dele fazem.
-
-### Modernização
-
-Sugestões que **não bloqueiam a compilação** e por isso ficam separadas do inventário (não entram no percentual de automação nem no código de saída). Cada item tem tipo, impacto, esforço, evidência (pacote ou `arquivo:linha`) e, quando se aplica, o serviço AWS relacionado.
-
-| Tipo | O que detecta | Exemplos |
-|---|---|---|
-| **Licença** | bibliotecas que passaram a ser comerciais; a ferramenta mantém a última versão gratuita e propõe alternativas | AutoMapper 15+ → Mapperly; MediatR 13+ → Mediator (source generator); FluentAssertions 8+ → AwesomeAssertions; EPPlus 5+ → ClosedXML; MassTransit 9+ → AWS.Messaging (SQS/SNS); iTextSharp (AGPL) → QuestPDF; suites comerciais (Telerik, DevExpress...) |
-| **Descontinuado** | sem manutenção ou sem versão para .NET 10 | Topshelf, Common.Logging, DotNetZip (CVE), Rotativa/wkhtmltopdf, Crystal Reports, ReportViewer, IdentityServer4, DotNetOpenAuth, Enterprise Library |
-| **Modernização** | alternativa mais simples/rápida ou código C# que **compila mas muda de comportamento** | `Encoding.GetEncoding(1252)` sem provider (exceção em runtime), `Encoding.Default` (virou UTF-8), parse/formatação sem cultura (container sem `LANG` usa cultura invariante), comparações de string com ICU, `string.GetHashCode()` persistido (aleatório por processo), `new HttpClient()` por chamada, `.Result`/`.Wait()`, `async void`, threads manuais, `ArrayList`, DataSet, EF6 → EF Core, Newtonsoft → System.Text.Json |
-| **Cloud (AWS)** | o que precisa mudar para rodar em container/serviços gerenciados | MSMQ → SQS; arquivos/UNC → S3 (ou EFS); SMTP → SES; sessão InProc → ElastiCache; chaves do Data Protection fora do container; `TransactionScope` (sem MSDTC no Linux); `DateTime.Now` (container em UTC); caminhos com `\` e maiúsculas (Linux é case-sensitive); `Process.Start`; IP/HTTPS atrás do ALB; Windows Service → BackgroundService; System.Drawing/Event Log/Registro/COM; Integrated Security no RDS; hosts on-premises (VPN); Azure Storage/Service Bus/Key Vault → S3/SQS/Secrets Manager |
-| **Segurança** | riscos que a migração é um bom momento para corrigir | credenciais em **qualquer** seção do config (appSettings, connection strings, SMTP, `<identity>`, `sessionState`, `machineKey` fixa, seções customizadas) e **embutidas no código C#** (literais com `Password=`, chaves/tokens, access keys AWS) → Secrets Manager; MD5/SHA1/DES/Rijndael; `Random` para tokens; SQL por concatenação; catch vazio |
-
-### Arquitetura alvo (AWS)
-
-Para cada projeto publicável a ferramenta recomenda **onde rodar** e por quê, com pré-requisitos e alternativas:
-
-| Projeto | Recomendação padrão | Quando muda |
-|---|---|---|
-| Web (MVC/Web API) | **ECS Fargate (Linux) atrás de um ALB** — padrão de menor operação para um portfólio | Dependência dura de Windows (COM, Registro, Office Interop, Crystal, WMI, P/Invoke) → **containers Windows no ECS**; IIS em código → **EC2 Windows**. API sem views/sessão → alternativa **Lambda**; app interna simples → alternativa **App Runner** |
-| **Automação orientada a evento** (console/serviço que lê pasta ou caixa de e-mail, processa planilhas/CSV, consome fila e grava no banco), sem dependências Windows e com até 25 arquivos de código | **AWS Lambda**, com o gatilho certo: arquivos → S3 Event Notifications → SQS (pastas de rede viram bucket via Storage Gateway File Gateway; parceiros via Transfer Family); e-mail → Amazon SES recebimento → S3 (ou EventBridge → Lambda consultando Microsoft Graph/IMAP); fila → SQS | Quartz/Hangfire embutido, projeto grande ou dependência Windows substituível → **tarefa ECS agendada**, com a dica de trocar o agendamento pelo evento |
-| Windows Service / console com timer ou Quartz/Hangfire, e automações orientadas a evento (pasta, caixa de e-mail) sem `--serverless` | **tarefa ECS Fargate agendada pelo EventBridge Scheduler** (paga só a execução; o `Main()` fica como está) | `--serverless` → Lambda (veja a linha acima) |
-| Windows Service consumindo fila (MSMQ/RabbitMQ/MassTransit) | **worker ECS Fargate consumindo SQS**, escalado pela profundidade da fila | alternativa Lambda com gatilho SQS |
-| Biblioteca / testes | não publicável (empacotada nos consumidores / roda no CI) | — |
-| Desktop | fora da AWS (ou AppStream 2.0) | — |
-
-Dependências Windows "moles" (System.Drawing, Event Log, PerformanceCounter, ServiceBase, MSMQ, Windows Auth, pastas UNC) **não** forçam containers Windows: a recomendação continua Linux e lista o que substituir (itens `MOD-WIN-*`). Leitura de Excel/Access via OLE DB ACE/Jet é dependência dura (só Windows com o Access Database Engine).
-
-**Conversões determinísticas para automações** (`migrate`):
-
-- **Windows Service → Worker Service.** Classes `: ServiceBase` viram `: BackgroundService` com Roslyn (`OnStart` → `ExecuteAsync`, `OnStop` → `StopAsync`, `InitializeComponent`/propriedades do designer removidos; `OnPause`/`OnShutdown` ficam como métodos comuns com `TODO`). O `Program.cs` com `ServiceBase.Run` vai para `_Legacy/` e um novo é gerado com `Host.CreateApplicationBuilder`, `AddWindowsService()` (para a instalação on-premises continuar possível) e `AddHostedService<T>()`. O projeto passa a `net10.0`, ganha `Microsoft.Extensions.Hosting(.WindowsServices)` e perde `System.ServiceProcess.ServiceController` se não usar `ServiceController`. Resultado: o serviço compila e roda num container Linux.
-- **`IConfiguration` sem intervenção.** Na classe do `Main` de consoles é criado um campo estático com `ConfigurationBuilder` (appsettings.json + `appsettings.{DOTNET_ENVIRONMENT}.json` + variáveis de ambiente, que é por onde o Secrets Manager injeta credenciais). Em `BackgroundService`s convertidos o `IConfiguration` é injetado pelo construtor e inicializadores de campo que o usam são movidos para dentro dele. Nas demais classes continua o item `CFG001`.
-- **Lambda.** Projetos recomendados como Lambda recebem `Function.cs` (handler `S3Event` para arquivos/e-mails, `SQSEvent` para filas, com `TODO` apontando para a lógica existente), `aws-lambda-tools-defaults.json` e os pacotes/propriedades `Amazon.Lambda.*`; o `Main()` original é mantido para rodar localmente ou como tarefa ECS.
-
-No sample, `LegacyShop.Worker` e `LegacyShop.Importador` compilam sem nenhuma alteração manual depois disso (os únicos erros restantes da solução estão na biblioteca `LegacyShop.Core`, mantidos de propósito para exercitar o laço de correção com LLM).
-
-**Automações de retaguarda** (a maioria dos portfólios legados): o perfilador reconhece leitura de caixa postal (EWS, IMAP/POP3, Microsoft Graph, Outlook), monitoramento de pasta (`FileSystemWatcher`/varredura), planilhas e CSV (EPPlus, ClosedXML, NPOI, ExcelDataReader, CsvHelper) e FTP. O EWS merece atenção especial: a Microsoft está desligando o EWS no Exchange Online (bloqueio a partir de outubro de 2026), então automações que leem caixas por `Microsoft.Exchange.WebServices` recebem item de impacto alto (`MOD-PKG-EWS`) com dois caminhos: Microsoft Graph, ou mover a entrada de e-mails para o Amazon SES (regra de recebimento → S3 → evento), que elimina polling e senha de caixa. No sample, `LegacyShop.Importador` (console agendado que lê `\\arquivos\pedidos\entrada`, a caixa `pedidos@` via EWS e grava no SQL) é recomendado como Lambda.
-
-Na solução como um todo, a ferramenta monta a lista de **serviços** (obrigatórios e recomendados) com o que cada um substitui e quem usa — RDS (engine conforme as connection strings), S3/EFS, SQS/SNS ou Amazon MQ, SES, ElastiCache, Secrets Manager, Parameter Store, CloudWatch, EventBridge Scheduler, Cognito ou Managed AD, CloudFront, VPN/Direct Connect quando há hosts internos, ECR e pipeline de CI/CD —, um **diagrama Mermaid**, um **plano em fases**, **riscos** e **notas de custo** (containers Windows ≈ 2x, licença do SQL Server no RDS e a opção Aurora PostgreSQL/Babelfish, NAT Gateway, retenção de logs).
-
-No `migrate`, a saída já vem **pronta para container**:
-
-- `Dockerfile` por projeto publicável (multi-stage, build a partir da raiz da solução, porta 8080, usuário não-root, `TZ`/`LANG` definidos quando a aplicação depende de fuso/cultura; imagens Windows quando a recomendação exige) e `.dockerignore` na raiz;
-- `Program.cs` com `/health` (target group do ALB), `UseForwardedHeaders` (IP e esquema reais atrás do balanceador) e cultura padrão para threads fora de requisição.
-
-Tudo isso aparece no relatório HTML (seções "Arquitetura alvo (AWS)" e "Modernização"), no Markdown (com o diagrama renderizável no GitHub/Azure DevOps), no Excel (abas "Modernização" e "Arquitetura AWS") e em `modernization.csv`. Para desligar: `--cloud none` (remove a arquitetura, os Dockerfiles e as sugestões do tipo Cloud; as demais continuam).
-
----
-
-## Assistência por LLM (opcional)
-
-Tudo que a ferramenta faz é determinístico e **funciona sem nenhuma LLM configurada** (padrão `--llm none`). Uma LLM entra só onde regra não alcança: entender intenção e gerar código novo. Com `--llm <provedor>` três etapas passam a existir:
-
-| Etapa | Quando | O que faz | Salvaguardas |
-|---|---|---|---|
-| **Correção do build** | `migrate` com build de verificação que falhou | Para cada arquivo com erro de compilação envia o arquivo, os erros e as dicas (`BuildHints`); grava a versão corrigida e **recompila**. Repete até `--llm-rounds` rodadas ou até o build passar. | O compilador é o oráculo: se os erros do arquivo não diminuírem, a mudança é **revertida** e o modelo ganha **uma segunda tentativa recebendo os erros que a própria proposta gerou**. Como o C# só aponta erros de corpo de método depois que os de declaração somem, um arquivo "corrigido" numa rodada que voltar a ter erros na seguinte também é revertido ao original. Originais em `_migration-report/llm/*.before`, propostas rejeitadas em `*.llm.cs.txt` / `*.resposta-rejeitada.txt`. Itens `LLM-FIX`, `LLM-FIX-PARTIAL`, `LLM-FIX-REVERTED`, `LLM-FIX-FAILED` e `LLM-SUMMARY` no inventário. |
-| **Rascunhos de conversão** | `migrate` | Para `IHttpModule`/`IHttpHandler`, `HttpApplication`, filtros do System.Web, `ServiceBase` e `ServiceHost` (itens WEB016/017/018, NET006/022) pede a versão ASP.NET Core/.NET 10 e salva como `<Nome>.Migrator.cs.txt` ao lado do arquivo. | Nunca entra no build; item `LLM-DRAFT` informativo. |
-| **Triagem de falsos positivos** | `analyze` e `migrate` | Para itens ambíguos (`MOD-ARCH-FILES`: arquivo temporário ou persistente? `MOD-CS-STATIC-STATE`: cache ou estado? `MOD-CS-TIMERS`: job idempotente?) envia o trecho de código e pede uma classificação em JSON com confiança. | Só rebaixa o impacto (Alto → Médio) com confiança ≥ 0,7 e anota a justificativa no item; nunca remove itens. |
-| **Leitura do arquiteto** | `analyze` e `migrate` | Recebe um dossiê estruturado (sinais, hospedagem, serviços, itens de maior impacto) e escreve o resumo executivo, as decisões por projeto, os riscos prioritários e a ordem de trabalho. | Aparece como "Leitura do arquiteto (LLM)" na seção de arquitetura; as tabelas geradas por regras continuam ao lado para conferência. |
-
-Comportamento em falha: se o servidor/modelo não responder, a ferramenta registra **um** aviso (`LLM-UNAVAILABLE`), para de chamar a LLM e termina a migração normalmente.
-
-Respostas são **cacheadas** em `~/.migrator/llm-cache` (chave = provedor + modelo + prompts), então rodar de novo dá o mesmo resultado sem chamar o modelo; `--llm-no-cache` desliga. O provedor Ollama é chamado com temperatura 0 e seed fixa pelo mesmo motivo.
-
-### Corporativa, via API (`--llm api`)
-
-Para a LLM do banco, que fica atrás de um gateway HTTP com OAuth2 *client credentials*, o scaffold já está pronto em `Llm/CorporateApiAssistant.cs`: a URL do chat e o endpoint de token são constantes no código (`DefaultEndpoint`, `DefaultTokenUrl`: troque pelos do gateway), o modelo é opcional (`--llm-model` ou `MIGRATOR_LLM_MODEL`) e só o `client_id` e o `client_secret` precisam ser informados:
-
-```powershell
-$env:MIGRATOR_LLM_CLIENT_ID = "..."; $env:MIGRATOR_LLM_CLIENT_SECRET = "..."
-migrator migrate C:\src\MinhaApp\MinhaApp.sln --llm api --llm-model gpt-4o
-```
-
-O token é obtido uma vez (form `grant_type=client_credentials`, credenciais no corpo; `ClientCredentialsInBody = false` troca para Basic Auth) e reaproveitado até expirar; sem endpoint de token, o `client_secret` vai como Bearer fixo (gateways de API key). O corpo da chamada é o de *chat completions* compatível com OpenAI (`messages` system/user, `temperature 0`) e a resposta é lida nas formas comuns (`choices[0].message.content`, `content[0].text`, `output.message.content[0].text`, `text`/`response`/`result`). Se o gateway tiver outro contrato, os dois pontos a ajustar são `BuildRequest` e `ExtractText`; headers extras (x-api-key, correlation id) entram em `CorporateApiSettings.ExtraHeaders`. O cache de respostas e o restante do pipeline (correção do build, rascunhos, triagem, resumo executivo) funcionam igual aos outros provedores.
-
-### Local, com Ollama
-
-```powershell
-ollama serve
-ollama pull qwen2.5-coder:3b          # leve, para testes; qwen2.5-coder:7b corrige melhor
-dotnet run --project src/Migrator.Cli -- migrate C:\src\Loja\Loja.sln --llm ollama
-dotnet run --project src/Migrator.Cli -- migrate C:\src\Loja\Loja.sln --llm ollama --llm-model qwen2.5-coder:7b --llm-rounds 5
-```
-
-Opções: `--llm ollama|none`, `--llm-model`, `--llm-endpoint` (padrão `http://localhost:11434`), `--llm-rounds` (padrão 3), `--llm-timeout` (minutos por chamada, padrão 6), `--llm-no-cache`.
-
-### Passo a passo para plugar uma nova LLM (SDK da empresa, OpenAI, Bedrock, Gemini...)
-
-A ferramenta só precisa de uma interface com duas strings de entrada e uma de saída; todo o resto (prompts, validação, laço de correção, cache, tolerância a falha) já está pronto e é independente do provedor.
-
-**1. Implemente `ILlmAssistant`** (`src/Migrator.Core/Llm/ILlmAssistant.cs`) sobre o SDK:
+Exemplo de controller Web API 2 antes e depois:
 
 ```csharp
-using Migrator.Core.Llm;
-
-public sealed class SdkEmpresaAssistant : ILlmAssistant
-{
-    private readonly SdkCliente _cliente;   // o cliente do SDK interno
-    private readonly string _modelo;
-
-    public SdkEmpresaAssistant(SdkCliente cliente, string modelo) { _cliente = cliente; _modelo = modelo; }
-
-    // Aparece nos relatórios ("LLM: empresa/claude-sonnet") e compõe a chave do cache: troque quando trocar o modelo.
-    public string Name => $"empresa/{_modelo}";
-
-    public async Task<string> CompleteAsync(string systemMessage, string userMessage, CancellationToken ct = default)
-    {
-        var resposta = await _cliente.CompletarAsync(
-            modelo: _modelo,
-            systemMessage: systemMessage,
-            userMessage: userMessage,
-            temperatura: 0,          // determinismo: a mesma migração deve dar o mesmo resultado
-            cancellationToken: ct);
-        return resposta.Texto;       // devolva só o texto; a ferramenta extrai o bloco ```csharp
-    }
-}
-```
-
-Regras de ouro da implementação: lance exceção em falha de infraestrutura (a ferramenta captura `HttpRequestException`, `TaskCanceledException`, `IOException`, `InvalidOperationException` e `NotSupportedException`, registra `LLM-UNAVAILABLE` uma vez e segue sem LLM); respeite o `CancellationToken`; não faça retry infinito dentro do assistente (o laço de correção já controla tentativas); se o SDK exigir "mensagens", monte `[system, user]` nessa ordem.
-
-**2. Escolha como a ferramenta vai encontrar a implementação:**
-
-- **Via CLI** (`--llm empresa`): adicione um `case` em `LlmAssistantFactory.Create` (`src/Migrator.Core/Llm/LlmAssistantFactory.cs`) e o nome em `Providers`:
-
-  ```csharp
-  LlmOptions.Ollama => new OllamaAssistant(options.Endpoint, options.Model, options.Timeout),
-  "empresa"         => new SdkEmpresaAssistant(SdkCliente.Criar(options.Endpoint), options.Model ?? "claude-sonnet"),
-  ```
-
-  `--llm-model` e `--llm-endpoint` chegam em `options.Model`/`options.Endpoint`; use-os como quiser (modelo, perfil, região).
-- **Via código**, hospedando o `Migrator.Core` num programa seu (ex.: um pipeline que roda as 51 aplicações):
-
-  ```csharp
-  var engine = new MigrationEngine(new SdkEmpresaAssistant(cliente, "claude-sonnet"));
-  var result = await engine.RunAsync(new MigrationOptions { InputPath = sln, Llm = new LlmOptions { MaxFixRounds = 5 } });
-  ```
-
-  Neste caso o `Provider` das opções é ignorado; o cache (`CacheDir`) e os limites (`MaxFixRounds`, `MaxFilesPerRound`, `MaxDrafts`, `Timeout`) continuam valendo.
-
-**3. Um modelo para corrigir código e outro, mais barato, para o texto (opcional).** Os prompts de sistema são constantes públicas em `LlmPrompts`; um assistente pode rotear por eles:
-
-```csharp
-public Task<string> CompleteAsync(string systemMessage, string userMessage, CancellationToken ct = default) =>
-    systemMessage == LlmPrompts.NarrativeSystem
-        ? _barato.CompleteAsync(systemMessage, userMessage, ct)
-        : _preciso.CompleteAsync(systemMessage, userMessage, ct);
-```
-
-**4. Mantenha o cache ligado.** `LlmAssistantFactory.Wrap` (aplicado automaticamente pela fábrica e pelo `MigrationEngine`) envolve o assistente em `CachedLlmAssistant`: a resposta fica em `~/.migrator/llm-cache/<Name>/<sha256>.txt`. Rodar a mesma aplicação de novo não chama o modelo. Mudou de modelo? Mude o `Name`.
-
-**5. Teste sem o modelo.** Os testes da ferramenta usam assistentes roteirizados (`tests/Migrator.Tests/LlmTests.cs`, classe `ScriptedAssistant`); copie o padrão para testar a sua integração: um `ILlmAssistant` que devolve respostas fixas prova o fluxo, e um teste de contrato contra o SDK real valida autenticação e formato.
-
-**6. Valide num sample antes do portfólio.** `migrate samples/LegacyShop/LegacyShop.sln --llm empresa --llm-no-cache` deve corrigir os erros do `LegacyShop.Core` (veja [Resultados no sample](#resultados-no-sample)); compare com `--llm none`.
-
-### Que modelo usar
-
-O que a ferramenta pede do modelo é **editar C# com precisão** (corrigir só os erros listados, sem inventar dependências) e, secundariamente, escrever texto. Modelos pequenos erram justamente no primeiro ponto: adicionam `using` de pacotes inexistentes, criam construtor em classe `static`, "melhoram" código que não deviam. Por isso a recomendação é por capacidade, não por fornecedor; use a versão mais recente de cada família disponível no SDK.
-
-| Uso | Recomendado | Aceitável | Evite |
-|---|---|---|---|
-| **Correção de build e rascunhos de conversão** (precisão em código) | Claude Sonnet/Opus (Anthropic, também via Amazon Bedrock), GPT da linha principal da OpenAI (GPT-4.1 / GPT-5), Gemini Pro | Modelos "mini"/"flash" das mesmas famílias, Amazon Nova Pro, Qwen2.5-Coder 14B+/32B local | Modelos < 7B, Nova Micro/Lite, modelos de chat genéricos sem foco em código |
-| **Leitura do arquiteto** (texto a partir de dados estruturados) | qualquer um dos acima; os "mini"/"flash" bastam e custam uma fração | Amazon Nova Lite/Pro | — |
-| **Desenvolvimento e testes locais** | `qwen2.5-coder:7b` no Ollama | `qwen2.5-coder:3b` (só para validar o fluxo; corrige casos simples) | `llama3.2:3b` e similares não especializados |
-
-Requisitos práticos, independentemente do fornecedor:
-
-- **Janela de contexto ≥ 128k tokens**: cada chamada leva um arquivo inteiro, os erros, as dicas e, na 2ª tentativa, a versão rejeitada; o dossiê da arquitetura pode passar de 10k tokens.
-- **Temperatura 0** (ou a menor que o SDK permitir) e, se houver, `seed` fixa: a mesma migração deve dar o mesmo resultado em duas execuções. O cache em disco da ferramenta cobre o restante.
-- **Timeout por chamada** compatível com o modelo (`--llm-timeout`, padrão 6 min): modelos grandes em nuvem respondem em segundos; locais, em minutos.
-- **Volume**: uma aplicação típica gera de 5 a 40 chamadas (arquivos com erro × até 2 tentativas + rascunhos + 1 narrativa), cada uma com 3k a 15k tokens de entrada. Para 51 aplicações é um custo pequeno frente a uma hora de desenvolvedor por arquivo; prefira o modelo mais capaz para a correção de build e um mais barato para a narrativa, se o SDK permitir escolher por chamada (basta duas implementações de `ILlmAssistant` ou um `switch` pelo `systemMessage`).
-- **Dados**: o código-fonte inteiro dos arquivos com erro vai no prompt. Use um endpoint com garantia de não-retenção/não-treinamento (o que o SDK interno da empresa normalmente já assegura).
-
-### Resultados no sample
-
-Medido em `samples/LegacyShop` (build de verificação ligado, nuget.org acessível, cache desligado, modelos locais num Mac):
-
-| | Sem LLM | Ollama `qwen2.5-coder:3b` | Ollama `qwen2.5-coder:7b` |
-|---|---|---|---|
-| Tempo | 18 s | ~7 min | ~2 min |
-| Erros de compilação restantes | 6 em 4 arquivos | 3 em 2 arquivos | 2 em 1 arquivo |
-| Arquivos corrigidos | — | 2 | 3 (injeção de `IConfiguration` por construtor; `BinaryFormatter` → `System.Text.Json`) |
-| Rascunhos de conversão | — | 3 | 3 (`IHttpModule` → middleware, filtro MVC, `ServiceBase` → `BackgroundService`) |
-| Resumo executivo | — | não (timeout) | sim |
-
-O que sobrou (`UserContext`, classe estática com `HttpContext.Current` numa biblioteca sem ASP.NET Core) é um caso em que o 7B devolveu o arquivo sem mudanças, corretamente, porque a regra proíbe inventar dependências; a ferramenta registrou `LLM-FIX-FAILED` em vez de fingir correção. Modelos maiores (ver tabela acima) resolvem esse caso propondo o `IHttpContextAccessor` com o `FrameworkReference` apropriado.
-
----
-
-## Modo portfólio
-
-Para migrar dezenas de aplicações, o `portfolio` analisa todas as soluções de uma pasta de uma vez e consolida o resultado:
-
-```powershell
-migrator portfolio C:\src\aplicacoes --report C:\src\portfolio-2026-10
-# depois de uma rodada de correções, compare com a execução anterior
-migrator portfolio C:\src\aplicacoes --report C:\src\portfolio-2026-11 --baseline C:\src\portfolio-2026-10\portfolio.json
-```
-
-Cada `.sln`/`.slnx` encontrado vira uma aplicação (pastas sem solução, mas com projetos, também contam; saídas anteriores do Migrator são ignoradas). Cada uma recebe um `analyze` completo em `apps/<nome>/` e o consolidado traz:
-
-- **Ranking por esforço**, com uma pontuação de referência (bloqueantes ×3, atenção ×1, modernização de impacto alto ×2, +10 se exige Windows, +5 por arquivo Web Forms, +8 por projeto VB.NET, +3 por projeto web) e faixas Baixo/Médio/Alto. Serve para ordenar e agrupar, não para estimar horas.
-- **Gaps mais frequentes** do inventário e da modernização: em quantas aplicações cada regra aparece (ex.: "EWS em 14 aplicações", "AutoMapper em 31"). É o que define o que vale resolver uma vez e replicar.
-- **Infraestrutura compartilhada**: bancos (servidor/base) e hosts internos usados por mais de uma aplicação; o cutover do RDS precisa ser coordenado entre elas.
-- **Ondas sugeridas**: três ondas por esforço acumulado, quick wins primeiro, mantendo juntas as aplicações que compartilham banco.
-- **Totais de hospedagem e de serviços AWS obrigatórios** (quantas aplicações precisam de RDS, SQS, SES...).
-- **Comparação com baseline** (`--baseline portfolio.json`): bloqueantes, atenção, impacto alto e esforço antes → depois por aplicação, com aplicações novas/removidas.
-
-Saídas: `portfolio-report.html` (tabelas ordenáveis), `portfolio-report.md`, `portfolio.xlsx` (abas Aplicações, Gaps, Compartilhado, Ondas, Baseline) e `portfolio.json`. Todo `analyze`/`migrate` também grava `migration-result.json` com o resultado completo (inventário, modernização, arquitetura, hospedagem) para dashboards e pipelines.
-
----
-
-## Infraestrutura como código e CI/CD
-
-No `migrate` (com `--cloud aws`, o padrão) a arquitetura proposta vira artefatos de deploy na saída. A ferramenta é Terraform por padrão no destino .NET 10 e CloudFormation no destino framework; `--iac terraform|cloudformation` escolhe explicitamente.
-
-**Terraform** (`--iac terraform`, padrão para .NET 10):
-
-```
-infra/terraform/      módulo raiz: versions, variables, network (VPC + endpoints), iam, ecs (cluster, task definitions,
-                      serviços web, tarefas agendadas, workers com autoscaling por fila), alb, lambda (função + SQS +
-                      gatilhos S3/SES), data (RDS), storage (S3, SQS), cache (ElastiCache), observability (SNS + alarmes), outputs
-infra/README.md       ordem de execução e checklist de produção
-.github/workflows/deploy.yml   build + testes, imagens no ECR por projeto, update-service no ECS, deploy das Lambdas
-```
-
-Princípios: um template por aplicação, parametrizado por variáveis (`terraform.tfvars.example` traz o ponto de partida); nenhum segredo no código (as task definitions referenciam os segredos criados pelos scripts de `_secrets/` via `data "aws_secretsmanager_secret"`; a senha master do RDS é gerenciada pelo próprio RDS); tasks em subnets privadas com VPC endpoints; execution role e task role separadas com permissões restritas ao prefixo da aplicação; health check em `/health`; circuit breaker com rollback no deploy; alarmes de 5xx e CPU. O que a ferramenta não consegue decidir fica como variável ou comentário (certificado ACM, hosts, VPN para a rede interna, recebimento SES).
-
-O código gerado para o sample passa em `terraform fmt -check`, `terraform init` e `terraform validate` (provider AWS 6.x). Projetos não convertidos (VB.NET) e os recomendados para EC2 Windows não geram recursos; o README da infra diz por quê. `--no-infra` desliga a geração.
-
-**CloudFormation** (`--iac cloudformation`, o padrão nos dois destinos; Terraform é `--iac terraform`), em `Cloud/CloudFormationGenerator`, reproduz o repositório padrão da plataforma do portfólio. A saída inteira segue esse layout:
-
-```
-app/src/                          a solução migrada (.sln/.slnx, projetos, nuget.config, Dockerfiles); é o working-directory da esteira
-infra/service.yml                 1º projeto publicável; os demais em service-<microservico>.yml
-                                  net10:     o service.yml da plataforma: parâmetros de tags (Squad, Finalidade, Sigla, Versao, TechTeamEmail,
-                                             OwnerTeamEmail, RepoUrl, GithubRepoId, NomeAplicacao), roles e NLB via SSM
-                                             (/Itau/Parameters/Common/*), listener TCP por serviço no NLB compartilhado, task definition
-                                             Fargate ARM64 com sidecars datadog-agent e log_router (FireLens; EnableDatadog=false volta ao
-                                             awslogs), health check curl, tags iu:finops:alocacao:* no task def e no service, ScalableTarget
-                                             com /Shared/Role/ecs-scaling-role; imagem ${DevToolsAccount}.dkr.ecr.<região>/<feature>-<micro>-<env>
-                                  framework: launch template (user data instala IIS/.NET 4.8.1/CodeDeploy/CloudWatch agent), Auto Scaling group,
-                                             target group + regra no ALB compartilhado, CodeDeploy, Parameter Store, log group e alarmes
-infra/lambda-<microservico>.yml   só com --serverless: função, DLQ, gatilhos (fila de eventos do S3, agendamento da caixa postal, SES opcional)
-infra/data.yml                    o que é da aplicação: RDS, bucket S3 (+ fila de eventos), filas dos workers, FSx for Windows (framework + pastas UNC),
-                                  bucket de artefatos do CodeDeploy (framework), nomes dos segredos; exportado para os serviços
-infra/{dev,hom,prod}/parameters*.json   {"Parameters": {...}} por template e ambiente: VPC, subnets, tamanhos, tags e os parâmetros de
-                                  aplicação (URLs/e-mails) com o valor de cada ambiente; nada é segredo
-infra/deploy.sh / deploy.ps1      aws cloudformation deploy na ordem (data → serviços → lambdas) com a pasta do ambiente
-infra/codedeploy/<microservico>/  (framework) appspec.yml + before-install / after-install / application-start / validate-service.ps1
-tests/testspec-dev.yml, -hom.yml  specs dos testes de aceitação (TAAC) da esteira, idênticos (buildspec 0.2 com echo; comentário diz como automatizar)
-.iupipes.yml                      descritor da esteira: language, build (working-directory ./app/src, docker-platform linux/arm64), unit-tests,
-                                  publish, infra.cloudformation (template-file-path service.yml, working-directory infra), contas por ambiente,
-                                  sonar, fortify. Contas, sigla e e-mails ficam como placeholders para preencher
-.github/workflows/deploy.yml      framework: MSBuild em runner Windows → zip → CodeDeploy;  net10: buildx linux/arm64 → ECR → update-service
-.gitattributes, .gitignore, README.md, _secrets/ (fora do git), _migration-report/
-```
-
-Convenções do template: `FeatureName` (solução, só letras) e `MicroServiceName` (projeto sem o prefixo da solução, só letras) com `AllowedPattern "[a-z]*"`, `DevToolsAccount`, `Projeto`/`Negocio`, `Environment` (dev/hom/prod), `EcsClusterName` padrão `ecs-cluster-<feature>-fargate`, alarmes no tópico `{{resolve:ssm:/org/member/workload_local_sns_arn:1}}`. Os templates gerados para o sample (nos dois destinos) passam limpos no `cfn-lint`; revalide com ele após mudar o gerador.
-
----
-
-## Feed NuGet privado (Artifactory, Nexus)
-
-Em redes corporativas o `nuget.org` costuma ser bloqueado e os pacotes vêm de um feed privado. Sem o `nuget.config` certo, cada restore do build de verificação esperaria o timeout do NuGet. A ferramenta trata isso em três pontos:
-
-1. **Informe o `nuget.config` antes do build**: `--nuget-config <arquivo>` (ou a variável `MIGRATOR_NUGET_CONFIG`). Se não houver nenhum (nem na raiz da solução de origem) e você estiver no terminal, o `migrate` **pergunta** o caminho antes de começar; em CI (entrada redirecionada) não pergunta. O arquivo é copiado para a **raiz da saída** como `nuget.config`, então restore local, Docker (`COPY nuget.config*`) e o workflow de deploy usam o mesmo feed. Alternativa sem arquivo: `--nuget-source <url do index.json>` gera um `nuget.config` mínimo.
-2. **Checagem de compatibilidade pelo mesmo feed**: a consulta de versões/frameworks dos pacotes (etapa 7) usa a primeira fonte v3 do `nuget.config` (service index `…/index.json`, com `packageSourceCredentials` em texto claro ou `%VARIAVEL%`), não mais o nuget.org fixo. Se o feed não responder, a ferramenta marca a compatibilidade como não verificada em vez de tentar o nuget.org.
-3. **Sondagem antes do build**: antes do primeiro `dotnet build`, um `GET` no service index com 12 s de limite. Se falhar, o build, os testes e o smoke test são pulados com o item bloqueante `BUILD-NUGET-UNREACHABLE` explicando o motivo e a correção, em vez de um cascateamento de timeouts de 30 minutos.
-
-```powershell
-migrator migrate C:\src\Loja\Loja.sln --nuget-config C:\src\nuget.config
-$env:MIGRATOR_NUGET_CONFIG = "C:\src\nuget.config"   # vale para todas as execuções, inclusive portfolio
-```
-
-Credenciais: prefira `%ARTIFACTORY_TOKEN%` no `nuget.config` (expandido em tempo de execução) a senhas em texto claro; senhas criptografadas pelo NuGet (`Password`, DPAPI) só funcionam no Windows e não são lidas pela ferramenta.
-
----
-
-## Exemplo: antes e depois
-
-Controller Web API 2 original:
-
-```csharp
+// antes
 public class ProdutosApiController : ApiController
 {
     public IEnumerable<ProdutoEntidade> GetPorCategoria([FromUri] string categoria) { ... }
-
-    [ResponseType(typeof(ProdutoEntidade))]
-    public IHttpActionResult Get(int id) { ... }
-
     public HttpResponseMessage Post(ProdutoEntidade produto)
     {
-        if (!ModelState.IsValid)
-            return Request.CreateErrorResponse(HttpStatusCode.BadRequest, ModelState);
+        if (!ModelState.IsValid) return Request.CreateErrorResponse(HttpStatusCode.BadRequest, ModelState);
         return Request.CreateResponse(HttpStatusCode.Created, produto);
     }
 }
-```
 
-Depois da migração:
-
-```csharp
+// depois
 [Route("api/[controller]")]
 [ApiController]
 public class ProdutosApiController : ControllerBase
 {
     [HttpGet]
     public IEnumerable<ProdutoEntidade> GetPorCategoria([FromQuery] string categoria) { ... }
-
-    [HttpGet("{id}")]
-    [ProducesResponseType(typeof(ProdutoEntidade), 200)]
-    public IActionResult Get(int id) { ... }
-
     [HttpPost]
     public IActionResult Post(ProdutoEntidade produto)
     {
-        if (!ModelState.IsValid)
-            return StatusCode((int)HttpStatusCode.BadRequest, ModelState);
+        if (!ModelState.IsValid) return StatusCode((int)HttpStatusCode.BadRequest, ModelState);
         return StatusCode((int)HttpStatusCode.Created, produto);
     }
 }
 ```
 
-Trecho do `web.config` original e o resultado:
+No sample, `LegacyShop.Worker` e `LegacyShop.Importador` compilam sem alteração manual; os erros restantes ficam em `LegacyShop.Core` de propósito, para exercitar o laço de correção com LLM.
 
-```xml
-<appSettings>
-  <add key="webpages:Version" value="3.0.0.0" />
-  <add key="ItensPorPagina" value="20" />
-</appSettings>
-<connectionStrings>
-  <add name="DefaultConnection" connectionString="Data Source=srv01;Initial Catalog=Loja;Integrated Security=True" />
-</connectionStrings>
-<system.web>
-  <authentication mode="Forms"><forms loginUrl="~/Account/Login" timeout="60" /></authentication>
-  <globalization culture="pt-BR" />
-</system.web>
-```
+---
 
-```jsonc
-// appsettings.json
-{
-  "ConnectionStrings": { "DefaultConnection": "Data Source=srv01;Initial Catalog=Loja;Integrated Security=True;Encrypt=False" },
-  "AppSettings": { "ItensPorPagina": "20" }
-}
-```
+## 5. URLs, e-mails e credenciais viram configuração
 
-```csharp
-// Program.cs (trecho)
-builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
-    .AddCookie(options => { options.LoginPath = "/Account/Login"; options.ExpireTimeSpan = TimeSpan.FromMinutes(60); });
-...
-app.UseRequestLocalization("pt-BR");
-```
+Em qualquer destino, antes de qualquer outra reescrita, `Migration/LiteralExternalizer` troca literais C# por leitura de configuração:
 
-A solução completa usada nesses exemplos está em `samples/LegacyShop` (MVC 5 + Web API 2 + EF6 + Windows Service + MSTest):
+| Literal | Vira | Onde fica o valor |
+|---|---|---|
+| `"https://erp.exemplo.com.br/api"` | `ConfigurationManager.AppSettings["Urls:ErpProtocoloUrl"]` (no .NET 10, `configuration["AppSettings:Urls:ErpProtocoloUrl"]`) | `web.config`/`appsettings.json` **e** um parâmetro da infra com um valor por ambiente |
+| `"suporte@exemplo.com.br"` | `AppSettings["Emails:EmailSuporte"]` | idem |
+| `const string Token = "erp-9f3b..."`, connection string com `Password=`, chaves `AKIA...` | `AppSettings["Credenciais:Token"]` com marcador `<secret: nome>` no config | valor real em `_secrets/<projeto>/` (fora do git); nome criado no Secrets Manager por `data.yml`; referência na infra |
+
+A chave vem do identificador (`ErpProtocoloUrl`) ou do host/parte local do e-mail; `const` vira `static readonly`; o `.csproj` ganha `System.Configuration` quando falta. Literais em atributos, `case`, valores padrão de parâmetro e strings interpoladas/verbatim não são reescritos e aparecem em `CS-CONFIG-SKIPPED`. Itens: `CS-CONFIG-EXTERNALIZED`, `CS-SECRET-EXTERNALIZED`.
+
+Os `appSettings` com URL/e-mail também viram parâmetros, com o valor por ambiente que os `Web.Debug.config`/`Web.Release.config` já declaravam. Credenciais em qualquer seção do config (appSettings, connection strings, SMTP, `<identity>`, `sessionState`, `machineKey`, seções customizadas) saem para `_secrets/<projeto>/` (`appsettings.Secrets.json`, template, `create-secrets.sh`, bloco da task definition, user-secrets); `--keep-secrets` desliga.
+
+Na infra: o EC2 recebe os parâmetros pelo Parameter Store (`/<feature>/<env>/...`, gravado no config pelo `after-install.ps1` do CodeDeploy) e os segredos pelo Secrets Manager; ECS e Lambda recebem variáveis de ambiente `AppSettings__Secao__Chave` e `secrets` da task definition. **Segredos nunca passam por template ou arquivo de parâmetros**: `data.yml` cria os nomes com `SecretString: PREENCHER` e `_secrets/<projeto>/create-secrets.sh` coloca os valores.
+
+---
+
+## 6. Dados acessados
+
+Em qualquer modo o relatório traz a seção **"Dados acessados"**: para cada banco, a tecnologia (SQL Server, Oracle, MySQL...) e a lista de tabelas, views e procedures que o código toca, com os campos, as operações (SELECT/INSERT/UPDATE/DELETE/EF), a forma de acesso, os projetos e o arquivo:linha. É o que o negócio e o DBA precisam para decidir o que vai para o RDS. Também sai em `data-access.csv`, na aba do Excel e no JSON; o componente RDS da arquitetura lista as tabelas.
+
+| Fonte (`Analysis/DataAccessAnalyzer`, análise estática) | O que extrai |
+|---|---|
+| SQL em literais C#/VB (inclusive concatenações, verbatim e interpoladas) e arquivos `.sql` | tabelas de `FROM`/`JOIN`/`INSERT`/`UPDATE`/`DELETE`/`MERGE`/`TRUNCATE`, procedures de `EXEC`; colunas do `SELECT`, `INSERT (...)`, `SET`, `WHERE`/`ON`/`ORDER BY`/`GROUP BY`; aliases resolvidos; CTEs, temporárias e `sys.*` ignorados; `Banco.dbo.Tabela` fixa o banco |
+| ADO.NET | `reader["Coluna"]`, `GetOrdinal`, `leitor("Coluna")` (VB) ligados ao comando mais próximo; `CommandType.StoredProcedure` + parâmetros |
+| Dapper | `Query/Execute("sql")`, `commandType: StoredProcedure` |
+| EF6 / EF Core | `DbSet<T>` → tabela (`ToTable`/`[Table]` ou convenção); colunas = propriedades públicas da entidade, com `HasColumnName`/`[Column]`, sem `[NotMapped]`/navegações; `SaveChanges` marca escrita |
+| EDMX | `EntitySet`/`EntityType` do modelo de armazenamento e `Function` |
+
+O banco é resolvido nesta ordem: nome de três partes → connection string citada no arquivo (`ConnectionStrings["X"]`, `name=X`) → banco único conhecido pelo projeto, pelos projetos que o hospedam ou pelas dependências. Ambiguidade fica como "não identificado (candidatos: ...)", em amarelo no Excel. A seção é documental: não entra no percentual de automação nem no código de saída.
+
+---
+
+## 7. Modernização e arquitetura AWS
+
+A ferramenta monta um **perfil** de cada projeto a partir do código original, dos pacotes, das referências e dos configs: banco (e Integrated Security), arquivos locais ou pastas de rede, MSMQ/RabbitMQ, SMTP, sessão em memória, estado estático, timers/agendadores, autenticação, componentes Windows (COM, Registro, System.Drawing, Event Log, WMI, Crystal...), segredos em texto claro, caixas postais (EWS, IMAP, Graph), planilhas, FTP e hosts internos. Bibliotecas são fundidas nos projetos que as referenciam.
+
+### Modernização
+
+Sugestões que não bloqueiam a compilação, separadas do inventário (não entram no percentual nem no código de saída). Cada item tem tipo, impacto, esforço, evidência (pacote ou `arquivo:linha`) e o serviço AWS relacionado.
+
+| Tipo | Exemplos |
+|---|---|
+| **Licença** | AutoMapper 15+ → Mapperly; MediatR 13+ → Mediator; FluentAssertions 8+ → AwesomeAssertions; EPPlus 5+ → ClosedXML; MassTransit 9+ → AWS.Messaging; iTextSharp → QuestPDF; Telerik/DevExpress |
+| **Descontinuado** | Topshelf, Common.Logging, DotNetZip, Rotativa, Crystal Reports, ReportViewer, IdentityServer4, Enterprise Library, **EWS** (bloqueio no Exchange Online a partir de outubro de 2026: Graph ou SES de entrada) |
+| **Modernização** (.NET 10/Linux; omitida no destino framework) | `Encoding.GetEncoding(1252)` sem provider, `Encoding.Default`, parse sem cultura, `string.GetHashCode()` persistido, `new HttpClient()` por chamada, `.Result`/`.Wait()`, `async void`, EF6 → EF Core, Newtonsoft → System.Text.Json |
+| **Cloud** | MSMQ → SQS; UNC → S3/EFS/FSx; SMTP → SES; sessão InProc → ElastiCache; `TransactionScope` sem MSDTC; `DateTime.Now` em UTC; caminhos com `\`; Integrated Security no RDS; hosts on-premises (VPN); Azure Storage/Service Bus/Key Vault → S3/SQS/Secrets Manager |
+| **Segurança** | credenciais em qualquer seção do config e literais no C# → Secrets Manager; MD5/SHA1/DES; `Random` para tokens; SQL por concatenação; catch vazio |
+
+### Hospedagem
+
+| Projeto | `--target framework` | `--target net10` |
+|---|---|---|
+| Web (MVC/Web API/Web Forms) | **EC2 Windows com IIS** atrás do ALB compartilhado | **ECS Fargate (Linux) + ALB**; dependência dura de Windows (COM, Registro, Office Interop, Crystal, WMI, OLE DB ACE/Jet) → containers Windows; IIS em código → EC2 Windows |
+| Windows Service / console com timer ou Quartz/Hangfire | **EC2 Windows** (serviço ou Agendador de Tarefas) | **tarefa ECS Fargate agendada** pelo EventBridge Scheduler, `Main()` intacto |
+| Automação orientada a evento (pasta, caixa postal, planilhas, FTP) | EC2 Windows | tarefa ECS agendada; com `--serverless`, **Lambda** com o gatilho certo (S3 Event Notifications, SES de entrada → S3, SQS) e `Function.cs` gerado |
+| Consumidor de fila (MSMQ, RabbitMQ, MassTransit) | EC2 Windows | **worker ECS Fargate** consumindo SQS, escalado pela fila |
+| Biblioteca / testes / desktop | não publicável | não publicável (desktop: fora da AWS ou AppStream) |
+
+Dependências Windows "moles" (System.Drawing, Event Log, PerformanceCounter, ServiceBase, MSMQ, Windows Auth, UNC) não forçam containers Windows: a recomendação continua Linux e lista o que substituir (`MOD-WIN-*`). Cada recomendação traz justificativa, pré-requisitos e alternativas; no destino framework a alternativa é a hospedagem após a modernização.
+
+Na solução como um todo saem a lista de **serviços** (obrigatórios e recomendados, com o que cada um substitui e quem usa), um **diagrama Mermaid**, um **plano em fases**, **riscos** e **notas de custo** (containers Windows ≈ 2x, licença do SQL Server no RDS, NAT Gateway). No .NET 10 cada projeto publicável ganha `Dockerfile` (multi-stage, porta 8080, usuário não-root, `TZ`/`LANG` quando a aplicação depende de fuso/cultura). `--cloud none` desliga arquitetura, Dockerfiles e sugestões do tipo Cloud.
+
+---
+
+## 8. Infraestrutura como código e esteira
+
+No `migrate` a arquitetura vira artefatos de deploy ([layout na seção 2](#2-o-que-sai-de-uma-migração)). `--iac cloudformation` é o padrão nos dois destinos; `--iac terraform` troca o gerador; `--no-infra` desliga.
+
+### CloudFormation (`Cloud/CloudFormationGenerator`)
+
+Reproduz o repositório padrão da plataforma. Infraestrutura compartilhada (VPC, subnets, roles, listener do balanceador, cluster ECS) entra como parâmetro, nunca é criada.
+
+| Arquivo | Conteúdo |
+|---|---|
+| `infra/service.yml` (framework) | launch template (user data instala IIS, .NET 4.8.1, agente CodeDeploy e CloudWatch), Auto Scaling group, target group + regra no ALB compartilhado, aplicação e grupo do CodeDeploy, parâmetros no SSM Parameter Store, log group, alarmes |
+| `infra/service.yml` (net10) | o `service.yml` da plataforma: parâmetros de tags (Squad, Finalidade, Sigla, Versao, TechTeamEmail, OwnerTeamEmail, RepoUrl, GithubRepoId, NomeAplicacao), roles e NLB via SSM (`/Itau/Parameters/Common/*`), listener TCP por serviço no NLB compartilhado, task definition Fargate ARM64 com sidecars `datadog-agent` e `log_router` (FireLens; `EnableDatadog=false` volta ao awslogs), health check, tags `iu:finops:alocacao:*`, ScalableTarget com `/Shared/Role/ecs-scaling-role`, imagem `${DevToolsAccount}.dkr.ecr...:<feature>-<micro>-<env>` |
+| `infra/lambda-<micro>.yml` | só com `--serverless`: função, DLQ, gatilhos (fila de eventos do S3, agendamento da caixa postal, SES opcional) |
+| `infra/data.yml` | RDS, bucket S3 (+ fila de eventos), filas dos workers, FSx for Windows (framework com pastas UNC), bucket de artefatos do CodeDeploy, `AWS::SecretsManager::Secret` por credencial (`PREENCHER`); exportado para os serviços |
+| `infra/{dev,hom,prod}/parameters*.json` | `{"Parameters": {...}}` por template e ambiente: VPC, subnets, tamanhos, tags e os parâmetros de aplicação (URLs/e-mails) com o valor de cada ambiente (dev ← `Web.Debug.config`, hom ← Staging/Homolog, prod ← `Web.Release.config`) |
+| `infra/codedeploy/<micro>/` | (framework) `appspec.yml` + `before-install`, `after-install` (lê Parameter Store e Secrets Manager para o config), `application-start`, `validate-service` em PowerShell |
+| `infra/deploy.sh`, `deploy.ps1`, `README.md` | `aws cloudformation deploy` na ordem data → serviços → lambdas com a pasta do ambiente; checklist |
+| `.iupipes.yml` | language, build (working-directory `./app/src`, docker-platform linux/arm64), unit-tests, publish, `infra.cloudformation` (template `service.yml`, working-directory `infra`), contas por ambiente, sonar, fortify; placeholders para sigla, contas e e-mails |
+| `tests/testspec-dev.yml`, `-hom.yml` | specs TAAC idênticos (buildspec 0.2 com `echo`; o comentário diz como automatizar) |
+| `.github/workflows/deploy.yml` | framework: MSBuild em `windows-latest` → zip → CodeDeploy; net10: buildx linux/arm64 → ECR → `update-service` |
+
+Convenções: `FeatureName` (solução, só letras) e `MicroServiceName` (projeto sem o prefixo da solução, só letras) com `AllowedPattern "[a-z]*"`, `DevToolsAccount`, `Projeto`/`Negocio`, `Environment` (dev/hom/prod), bloco "NÃO ALTERE" da esteira, alarmes no tópico `{{resolve:ssm:/org/member/workload_local_sns_arn:1}}`. Os templates do sample passam limpos no `cfn-lint` nos dois destinos; revalide após mudar o gerador.
+
+### Terraform (`--iac terraform`)
+
+`infra/terraform/` como módulo raiz: versions, variables (`terraform.tfvars.example`; os parâmetros de aplicação em `app_settings`), network (VPC + endpoints), iam, ecs (cluster, task definitions, serviços web, tarefas agendadas, workers por fila), alb, lambda, data (RDS), storage (S3, SQS), cache, observability (SNS + alarmes), outputs. Segredos via `data "aws_secretsmanager_secret"`; tasks em subnets privadas; roles separadas; circuit breaker com rollback; alarmes de 5xx e CPU. `.iupipes.yml` e os specs TAAC são gerados do mesmo jeito. O módulo do sample passa em `terraform fmt -check`, `init` e `validate` (provider AWS 6.x). Projetos VB e EC2 Windows não geram recursos; o README da infra diz por quê.
+
+---
+
+## 9. Assistência por LLM
+
+Tudo é determinístico e **funciona sem LLM** (`--llm none`, o padrão). Com `--llm <provedor>` entram quatro etapas:
+
+| Etapa | Quando | O que faz | Salvaguardas |
+|---|---|---|---|
+| **Correção do build** | `migrate --target net10` com build que falhou | Para cada arquivo com erro envia o arquivo, os erros e as dicas; grava a correção e recompila, até `--llm-rounds` rodadas | Se os erros do arquivo não diminuírem, reverte e dá uma segunda tentativa com os erros da própria proposta; arquivo que volta a ter erro na rodada seguinte também é revertido. Originais em `_migration-report/llm/*.before`. Itens `LLM-FIX*`, `LLM-SUMMARY` |
+| **Rascunhos** | `migrate --target net10` | `IHttpModule`/`IHttpHandler`, `HttpApplication`, filtros do System.Web, `ServiceHost` → versão ASP.NET Core salva como `<Nome>.Migrator.cs.txt` | Nunca entra no build; item `LLM-DRAFT` |
+| **Triagem** | `analyze` e `migrate` | Para itens ambíguos (arquivo temporário ou persistente? cache ou estado? job idempotente?) pede classificação em JSON | Só rebaixa impacto Alto → Médio com confiança ≥ 0,7; nunca remove itens |
+| **Leitura do arquiteto** | `analyze` e `migrate` | Resumo executivo, decisões por projeto, riscos e ordem de trabalho a partir do dossiê estruturado | As tabelas por regra continuam ao lado |
+
+Em falha de infraestrutura a ferramenta registra um único `LLM-UNAVAILABLE`, para de chamar o modelo e termina normalmente. Respostas ficam em cache em `~/.migrator/llm-cache` (chave = provedor + modelo + prompts); `--llm-no-cache` desliga. `--llm-timeout` limita cada chamada (padrão 6 min).
+
+### Corporativa, via API (`--llm api`)
+
+Para a LLM do banco, atrás de um gateway HTTP com OAuth2 *client credentials*, o scaffold está em `Llm/CorporateApiAssistant.cs`. A URL do chat e o endpoint de token são constantes no código (`DefaultEndpoint`, `DefaultTokenUrl`: troque uma vez pelos do gateway); o modelo é opcional (`DefaultModel`, `--llm-model` ou `MIGRATOR_LLM_MODEL`); em tempo de execução só `client_id` e `client_secret` são obrigatórios:
 
 ```powershell
-dotnet run --project src/Migrator.Cli -- migrate samples\LegacyShop\LegacyShop.sln -o C:\temp\LegacyShop.net10
+$env:MIGRATOR_LLM_CLIENT_ID = "..."; $env:MIGRATOR_LLM_CLIENT_SECRET = "..."
+migrator migrate C:\src\Loja\Loja.sln --target net10 --llm api --llm-model gpt-4o
 ```
+
+O token é obtido uma vez (form `grant_type=client_credentials`, credenciais no corpo; `ClientCredentialsInBody = false` troca para Basic Auth; `--llm-scope` acrescenta o escopo) e reaproveitado até expirar; sem endpoint de token, o `client_secret` vai como Bearer fixo. O corpo é *chat completions* compatível com OpenAI (`messages` system/user, `temperature 0`) e a resposta é lida nas formas comuns (`choices[0].message.content`, `content[0].text`, `output.message.content[0].text`, `text`/`response`/`result`). Se o gateway tiver outro contrato, os dois pontos a ajustar são `BuildRequest` e `ExtractText`; headers extras entram em `CorporateApiSettings.ExtraHeaders`. `--llm-endpoint` e `--llm-token-url` só sobrepõem as constantes para testes.
+
+### Local, com Ollama (`--llm ollama`)
+
+```powershell
+ollama serve
+ollama pull qwen2.5-coder:7b          # o padrão é qwen2.5-coder:3b, mais leve e menos preciso
+migrator migrate C:\src\Loja\Loja.sln --target net10 --llm ollama --llm-model qwen2.5-coder:7b --llm-rounds 5
+```
+
+Endpoint padrão `http://localhost:11434` (`--llm-endpoint`); temperatura 0 e seed fixa.
+
+### Outro provedor (SDK da empresa, Bedrock, OpenAI, Gemini)
+
+Implemente `ILlmAssistant` (`Name` + `CompleteAsync(systemMessage, userMessage, ct)` devolvendo texto) sobre o SDK, lançando exceção em falha de infraestrutura, respeitando o `CancellationToken` e sem retry interno. Depois, ou acrescente um `case` em `LlmAssistantFactory.Create` e o nome em `Providers` (vira `--llm <nome>`), ou passe a instância a `new MigrationEngine(assistant)` ao hospedar o `Migrator.Core` num programa seu. `LlmAssistantFactory.Wrap` aplica o cache; os prompts de sistema são constantes públicas em `LlmPrompts`, úteis para rotear a narrativa a um modelo mais barato. Teste com assistentes roteirizados (`tests/Migrator.Tests/LlmTests.cs`, `ScriptedAssistant`) e com o sample.
+
+### Que modelo usar
+
+O que a ferramenta pede é **editar C# com precisão** (só os erros listados, sem inventar dependências). Modelos pequenos erram justamente aí.
+
+| Uso | Recomendado | Aceitável | Evite |
+|---|---|---|---|
+| Correção de build e rascunhos | Claude Sonnet/Opus, GPT da linha principal, Gemini Pro | "mini"/"flash" das mesmas famílias, Nova Pro, Qwen2.5-Coder 14B+ local | < 7B, Nova Micro/Lite, modelos de chat genéricos |
+| Leitura do arquiteto e triagem | qualquer um acima; "mini"/"flash" bastam | Nova Lite/Pro | — |
+| Desenvolvimento local | `qwen2.5-coder:7b` | `qwen2.5-coder:3b` | `llama3.2:3b` e similares |
+
+Requisitos: contexto ≥ 128k tokens, temperatura 0, timeout compatível, endpoint sem retenção (o código-fonte inteiro dos arquivos com erro vai no prompt). Uma aplicação típica gera de 5 a 40 chamadas de 3k a 15k tokens.
+
+Medido em `samples/LegacyShop` com modelos locais num Mac: sem LLM, 6 erros de compilação em 4 arquivos; `qwen2.5-coder:3b`, 3 erros em 2 arquivos (~7 min); `qwen2.5-coder:7b`, 2 erros em 1 arquivo (~2 min), 3 rascunhos e resumo executivo. O erro restante (`HttpContext.Current` numa biblioteca sem ASP.NET Core) é um caso em que o modelo devolveu o arquivo sem mudanças, corretamente, e a ferramenta registrou `LLM-FIX-FAILED` em vez de fingir correção.
 
 ---
 
-## Lendo o inventário
+## 10. Modo portfólio
 
-| Campo | Significado |
+`portfolio <pasta>` analisa todas as soluções de uma pasta (uma aplicação por `.sln`/`.slnx`; pastas só com projetos também contam; saídas do Migrator são ignoradas), roda um `analyze` completo em `apps/<nome>/` e consolida:
+
+- **Ranking por esforço**: pontuação de referência (bloqueantes ×3, atenção ×1, modernização de impacto alto ×2, +10 se exige Windows, +5 por arquivo Web Forms, +8 por projeto VB.NET, +3 por projeto web) e faixas Baixo/Médio/Alto. Serve para ordenar, não para estimar horas.
+- **Gaps mais frequentes**: em quantas aplicações cada regra aparece ("EWS em 14 aplicações"). Define o que vale resolver uma vez e replicar.
+- **Infraestrutura compartilhada**: bancos e hosts internos usados por mais de uma aplicação; o cutover do RDS precisa ser coordenado.
+- **Ondas sugeridas**: três ondas por esforço acumulado, quick wins primeiro, mantendo juntas as aplicações que compartilham banco.
+- **Totais** de hospedagem e de serviços AWS obrigatórios.
+- **Comparação com baseline** (`--baseline portfolio.json` de uma execução anterior): bloqueantes, atenção, impacto alto e esforço antes → depois por aplicação.
+
+```powershell
+migrator portfolio C:\src\aplicacoes --report C:\src\portfolio-2026-10
+migrator portfolio C:\src\aplicacoes --report C:\src\portfolio-2026-11 --baseline C:\src\portfolio-2026-10\portfolio.json
+```
+
+Saídas: `portfolio-report.html`, `portfolio-report.md`, `portfolio.xlsx` (Aplicações, Gaps, Compartilhado, Ondas, Baseline) e `portfolio.json`. `--target`, `--serverless`, `--cloud` e `--llm` valem para todas as aplicações.
+
+---
+
+## 11. Feed NuGet privado
+
+Em redes corporativas o nuget.org é bloqueado e os pacotes vêm de um Artifactory/Nexus. A ferramenta trata isso em três pontos:
+
+1. **`--nuget-config <arquivo>`** (ou `MIGRATOR_NUGET_CONFIG`): copiado para `app/src/nuget.config`, então restore, Docker e workflow usam o mesmo feed. Sem nenhum (nem na raiz da solução de origem), o `migrate` interativo pergunta o caminho; em CI não pergunta. `--nuget-source <url do index.json>` gera um `nuget.config` mínimo.
+2. **Compatibilidade pelo mesmo feed**: a consulta de versões usa a primeira fonte v3 do `nuget.config` (`packageSourceCredentials` em texto claro ou `%VARIAVEL%`). Se o feed não responder, a compatibilidade fica "não verificada".
+3. **Sondagem antes do build**: um `GET` no service index com 12 s de limite; se falhar, build, testes e smoke são pulados com `BUILD-NUGET-UNREACHABLE` em vez de meia hora de timeouts.
+
+Prefira `%ARTIFACTORY_TOKEN%` a senhas em texto claro; senhas DPAPI só funcionam no Windows e não são lidas. Atrás de proxy, defina `HTTPS_PROXY`.
+
+---
+
+## 12. Relatórios e inventário
+
+Em `_migration-report/` (ou `--report`):
+
+| Arquivo | Uso |
 |---|---|
-| Severidade | **Bloqueante**: impede compilar ou funcionar. **Atenção**: compila, mas o comportamento pode mudar ou precisa de revisão. **Informativo**: registro. |
-| Automático | **Sim**: a ferramenta já resolveu (fica registrado para auditoria). **Não**: precisa de ação. |
-| Categoria | Pacote, Código, View, Configuração, Inicialização, Projeto ou Build |
-| Regra | Identificador estável, útil para filtrar e agrupar (prefixos: `PKG-` pacotes, `CS-`/`WEB`/`NET` código, `VW` views, `CFG-` configuração, `STARTUP-` inicialização, `PRJ-` projeto, `CSxxxx`/`NUxxxx`/`SYSLIBxxxx` build) |
-| Arquivo / Linha | Caminho relativo ao projeto migrado e a primeira ocorrência |
-| Ocorrências | Quantas vezes o padrão aparece no arquivo |
+| `migration-report.html` | navegável: resumo, projetos, dados acessados, arquitetura, modernização, filtros por severidade e busca, erros de build por código |
+| `migration-report.md` | para PR ou wiki, com o diagrama Mermaid |
+| `inventory.xlsx` | abas Resumo, Inventário, Dados acessados, Modernização e Arquitetura AWS |
+| `inventory.csv`, `modernization.csv`, `data-access.csv` | integração com outras ferramentas (UTF-8 com BOM) |
+| `migration-result.json` | resultado completo (inventário, modernização, arquitetura, hospedagem, bancos, hosts, dados acessados, destino e IaC) |
+| `build-verification.log` | saída completa do build (net10) |
 
-**% automatizado** = itens resolvidos automaticamente ÷ (automáticos + pendentes de ação), sem contar os erros de build.
+**Lendo o inventário.** Severidade: **Bloqueante** impede compilar ou funcionar; **Atenção** compila mas pode mudar de comportamento; **Informativo** é registro. **Automático = Sim** significa que a ferramenta já resolveu (fica para auditoria). Regra é um identificador estável para filtrar (`PKG-` pacotes, `CS-`/`WEB`/`NET` código, `VW` views, `CFG-` configuração, `STARTUP-`, `PRJ-` projeto, `BUILD-` e códigos do compilador, `LLM-`, `TEST-`/`SMOKE-`/`DOCKER-`). **% automatizado** = itens automáticos ÷ (automáticos + pendentes), sem os erros de build.
 
-**Código de saída**: `0` = nenhuma pendência bloqueante e build OK; `2` = há itens bloqueantes ou erro de build; `1` = erro de uso (caminho inválido, pasta de saída em conflito). Em pipelines, use o `analyze` como "portão" para acompanhar a evolução de cada aplicação.
-
----
-
-## Fluxo de trabalho recomendado
-
-1. **Rode o `analyze`** em cada aplicação do portfólio e use o `inventory.xlsx` para estimar o esforço (bloqueantes por projeto e por categoria).
-2. **Ataque antes os bloqueantes estruturais**, que costumam definir o tamanho do trabalho: WebForms, WCF servidor, Identity 2/Membership, containers de DI, child actions, módulos HTTP.
-3. **Rode o `migrate`** e versione a pasta gerada imediatamente (novo repositório ou branch).
-4. **Corrija na saída, em ordem de dependência**: bibliotecas primeiro, depois os projetos que as consomem. Recompile, porque novos erros aparecem a cada camada, e use o relatório como checklist.
-5. **Procure os `// TODO Migrator`** no `Program.cs` e revise a pasta `_Legacy/`. Apague-a quando terminar.
-6. **Teste o comportamento**, não só a compilação: autenticação, sessão, uploads, serialização JSON (nomes de propriedades) e rotas.
-
-> Atenção: `migrate --force` **apaga e regera** a pasta de saída. Não use `--force` sobre uma saída em que você já fez correções manuais; gere em outra pasta e compare.
+**Código de saída**: `0` nenhum bloqueante e build OK; `2` há bloqueantes ou erro de build; `1` erro de uso; `130` cancelado. Em pipelines, o `analyze` serve como portão.
 
 ---
 
-## Decisões de projeto
-
-- **Cópia, nunca in-place.** A saída fica fora da pasta de origem, permitindo comparar e repetir quantas vezes for preciso.
-- **Preservar comportamento antes de modernizar.** Algumas escolhas priorizam "funcionar igual" e deixam a modernização como sugestão no inventário:
-  - Web API continua com Newtonsoft.Json e nomes de propriedade sem camelCase, para não quebrar clientes;
-  - views MVC mantêm PascalCase no `Json()`;
-  - EF6 é mantido na versão 6.5, que roda no .NET 10, em vez de forçar EF Core;
-  - `Encrypt=False` é adicionado às connection strings do SQL Server, porque o `Microsoft.Data.SqlClient` criptografa por padrão. Isso vale para a solução inteira, já que a connection string costuma ficar no projeto host;
-  - o `App.config` é mantido em projetos não-web quando o código ainda usa `Settings.settings` ou seções customizadas;
-  - `Nullable` e `ImplicitUsings` ficam desligados, para não gerar milhares de avisos e conflitos de nomes no código legado;
-  - o `AssemblyInfo.cs` é preservado.
-- **Não inventar código onde há risco.** `ConfigurationManager` é reescrito para `configuration[...]`; a injeção de `IConfiguration` é feita automaticamente só onde não há ambiguidade (classe do `Main` em consoles e `BackgroundService`s convertidos) e fica para o desenvolvedor nas demais classes: o erro de compilação aponta exatamente onde. O mesmo vale para `HttpContext.Current` fora de controllers.
-- **Compatibilidade verificada, não presumida.** A ferramenta consulta o conteúdo real dos pacotes no nuget.org e compila a saída.
-
----
-
-## Limitações conhecidas
-
-- **Projetos fora do escopo**: VB.NET, Web Sites sem `.csproj`, F# e projetos de banco de dados.
-- **Sem conversão automática, só inventário**: WebForms, hospedagem WCF, ASP.NET Identity 2, SignalR clássico e servidor OAuth do OWIN. Todos aparecem com a alternativa sugerida.
-- **Reescrita por padrões de texto**: parte das trocas de código é feita assim, e casos muito incomuns podem escapar. O build de verificação existe justamente para revelar o que sobrou.
-- **Erros de compilação em camadas**: veja a etapa 11.
-- **Feeds privados**: sem `NuGet.config` e credenciais, pacotes internos aparecem como NU1101 no build.
-- **`COMReference`**: é mantido, mas exige o MSBuild do Visual Studio (MSB4803 no `dotnet build`).
-
----
-
-## Referência da linha de comando
+## 13. Referência da linha de comando
 
 ```
-migrator analyze <entrada> [--report <pasta>] [--offline] [--nuget-config <arquivo>] [--nuget-source <url>] [--cloud aws|none] [--target framework|net10] [--serverless] [--llm none|ollama] [--llm-model <m>] [--llm-endpoint <url>] [--llm-timeout <min>] [--llm-no-cache]
-migrator portfolio <pasta> [--report <pasta>] [--offline] [--cloud aws|none] [--target framework|net10] [--serverless] [--baseline <portfolio.json>] [--llm ...]
-migrator migrate <entrada> [--output <pasta>] [--report <pasta>] [--offline] [--cloud aws|none] [--target framework|net10] [--serverless] [--iac cloudformation|terraform]
-                 [--force] [--no-build] [--build-timeout <min>] [--no-tests] [--no-smoke] [--verify-docker] [--keep-secrets] [--no-infra]
-                 [--llm none|ollama] [--llm-model <m>] [--llm-endpoint <url>] [--llm-rounds <n>] [--llm-timeout <min>] [--llm-no-cache]
+migrator analyze   <entrada> [--report] [--offline] [--nuget-config] [--nuget-source] [--cloud] [--target] [--serverless] [--llm ...]
+migrator migrate   <entrada> [--output] [--report] [--offline] [--nuget-config] [--nuget-source] [--cloud] [--target] [--iac] [--serverless]
+                             [--force] [--no-build] [--build-timeout] [--no-tests] [--no-smoke] [--verify-docker] [--keep-secrets] [--no-infra] [--llm ...]
+migrator portfolio <pasta>   [--report] [--offline] [--nuget-config] [--nuget-source] [--cloud] [--target] [--serverless] [--baseline] [--llm ...]
 ```
 
-| Opção | Comando | Descrição |
+**Entrada e saída**
+
+| Opção | Comandos | Descrição |
 |---|---|---|
-| `<entrada>` | ambos | `.sln`, `.slnx`, `.csproj` ou pasta com projetos |
-| `--output`, `-o` | migrate | Pasta de saída (padrão: `<pasta-pai>\<nome-da-solução>.net481`; `.net10` com `--target net10`) |
-| `--report`, `-r` | ambos | Pasta dos relatórios (padrão: `<saída>\_migration-report` no migrate; `<pasta-pai>\<nome>.migration-report` no analyze) |
-| `--offline` | todos | Não consulta o feed NuGet (compatibilidade não verificada) |
-| `--nuget-config` | todos | `nuget.config` do feed privado; copiado para a raiz da saída e usado na compatibilidade e no restore (alternativa: `MIGRATOR_NUGET_CONFIG`) |
-| `--nuget-source` | todos | URL do service index v3 do feed; gera um `nuget.config` mínimo se não houver |
-| `--cloud` | ambos | Nuvem de destino da proposta de arquitetura e dos Dockerfiles: `aws` (padrão) ou `none` |
-| `--target` | todos | `framework` (padrão: lift-and-shift, código intocado em .NET Framework 4.8.1, EC2 Windows) ou `net10` (reescreve o código, ECS Fargate); veja [Destino .NET Framework 4.8.1](#destino-net-framework-481-o-padrão-sem-migrar-o-código) |
-| `--serverless` | todos | Recomenda Lambda (e gera handler/gatilhos) para automações orientadas a evento; sem a opção elas ficam em tarefa ECS agendada com o `Main()` intacto |
-| `--iac` | migrate | `cloudformation` (padrão nos dois destinos; layout da plataforma, `infra/service.yml` + `infra/<env>/parameters.json`) ou `terraform` |
-| `--llm` | ambos | Assistência por LLM: `none` (padrão), `ollama` (local) ou `api` (LLM corporativa via API, OAuth2 client credentials); veja [Assistência por LLM](#assistência-por-llm-opcional) |
-| `--llm-model`, `--llm-endpoint` | ambos | Modelo e endpoint do provedor (no `api` a URL é fixa no código; `--llm-endpoint` só sobrepõe para testes) |
-| `--llm-client-id`, `--llm-client-secret`, `--llm-token-url`, `--llm-scope` | ambos | Provedor `api`: credenciais OAuth2 (ou `MIGRATOR_LLM_CLIENT_ID`/`MIGRATOR_LLM_CLIENT_SECRET`), endpoint de token e escopo opcionais |
-| `--llm-rounds` | migrate | Rodadas build → correção → build (padrão 3) |
-| `--llm-timeout` | ambos | Tempo máximo de cada chamada à LLM, em minutos (padrão 6) |
-| `--llm-no-cache` | ambos | Desliga o cache de respostas |
-| `--force` | migrate | Substitui uma saída anterior do Migrator |
-| `--no-build` | migrate | Pula o build de verificação |
-| `--build-timeout` | migrate | Tempo máximo do build de verificação em minutos (padrão 30) |
-| `--baseline` | portfolio | `portfolio.json` anterior para comparar a evolução |
-| `--no-tests`, `--no-smoke` | migrate | Não executa os testes migrados / não sobe as apps web para testar `/health` |
-| `--verify-docker` | migrate | Constrói as imagens dos Dockerfiles gerados com o Docker local |
-| `--keep-secrets` | migrate | Mantém credenciais no appsettings gerado em vez de movê-las para `_secrets/` |
-| `--no-infra` | migrate | Não gera `infra/` (Terraform ou CloudFormation) nem o workflow de deploy |
+| `<entrada>` / `<pasta>` | todos | `.sln`, `.slnx`, `.csproj` ou pasta com projetos; no `portfolio`, a pasta que contém as aplicações |
+| `--output`, `-o` | migrate | Pasta de saída. Padrão: `<pasta-pai>\<nome>.net481` (`.net10` com `--target net10`). Não pode ficar dentro da origem |
+| `--report`, `-r` | todos | Pasta dos relatórios. Padrão: `<saída>\_migration-report` no migrate; `<pasta-pai>\<nome>.migration-report` no analyze |
+| `--force` | migrate | Substitui uma saída anterior. Só apaga pastas com o marcador `.migrator-output` |
 
-Atrás de proxy corporativo, defina `HTTPS_PROXY` antes de executar. Se o nuget.org estiver inacessível, a ferramenta continua e avisa no relatório.
+**Destino e nuvem**
+
+| Opção | Comandos | Descrição |
+|---|---|---|
+| `--target` | todos | `framework` (padrão: lift-and-shift, código intocado em .NET Framework 4.8.1, EC2 Windows) ou `net10` (reescreve o código, ECS Fargate) |
+| `--cloud` | todos | `aws` (padrão) ou `none`: desliga arquitetura, Dockerfiles e sugestões do tipo Cloud |
+| `--serverless` | todos | Recomenda Lambda (e gera handler/gatilhos) para automações orientadas a evento. Sem a opção elas ficam em tarefa ECS agendada com o `Main()` intacto |
+| `--iac` | migrate | `cloudformation` (padrão nos dois destinos; layout da plataforma) ou `terraform` |
+| `--no-infra` | migrate | Não gera `infra/`, `.iupipes.yml`, `tests/` nem o workflow |
+
+**Pacotes e build**
+
+| Opção | Comandos | Descrição |
+|---|---|---|
+| `--offline` | todos | Não consulta o feed NuGet; versões mantidas e marcadas como não verificadas |
+| `--nuget-config` | todos | `nuget.config` do feed privado; copiado para `app/src` e usado na compatibilidade e no restore. Alternativa: `MIGRATOR_NUGET_CONFIG` |
+| `--nuget-source` | todos | URL do service index v3 do feed; gera um `nuget.config` mínimo se não houver |
+| `--no-build` | migrate | Pula o build de verificação (net10; no framework ele já não roda) |
+| `--build-timeout` | migrate | Tempo máximo do build de verificação, em minutos (padrão 30) |
+| `--no-tests` | migrate | Não executa os projetos de teste migrados |
+| `--no-smoke` | migrate | Não sobe as apps web para testar `/health` |
+| `--verify-docker` | migrate | Constrói as imagens dos Dockerfiles gerados com o Docker local (lento) |
+| `--keep-secrets` | migrate | Mantém credenciais no appsettings gerado em vez de movê-las para `_secrets/` (não recomendado) |
+
+**LLM** (todos os comandos, exceto `--llm-rounds`)
+
+| Opção | Descrição |
+|---|---|
+| `--llm` | `none` (padrão), `ollama` (local) ou `api` (LLM corporativa via API com OAuth2 client credentials) |
+| `--llm-model` | Modelo. Ollama: padrão `qwen2.5-coder:3b`. API: nome enviado no corpo, padrão `DefaultModel`, ou `MIGRATOR_LLM_MODEL` |
+| `--llm-endpoint` | Ollama: padrão `http://localhost:11434`. API: a URL é fixa no código; a opção (ou `MIGRATOR_LLM_ENDPOINT`) só sobrepõe para testes |
+| `--llm-client-id` | API: `client_id` do OAuth2, ou `MIGRATOR_LLM_CLIENT_ID` |
+| `--llm-client-secret` | API: `client_secret`. Prefira `MIGRATOR_LLM_CLIENT_SECRET` para não ficar no histórico do shell |
+| `--llm-token-url` | API: sobrepõe o endpoint de token fixo no código, ou `MIGRATOR_LLM_TOKEN_URL`. Vazio = `client_secret` como Bearer fixo |
+| `--llm-scope` | API: escopo do token, ou `MIGRATOR_LLM_SCOPE` |
+| `--llm-rounds` | migrate: rodadas build → correção → build (padrão 3) |
+| `--llm-timeout` | Tempo máximo de cada chamada, em minutos (padrão 6) |
+| `--llm-no-cache` | Não usa o cache de respostas (`~/.migrator/llm-cache`) |
+
+**Portfólio**
+
+| Opção | Descrição |
+|---|---|
+| `--baseline` | `portfolio.json` de uma execução anterior para comparar a evolução |
+
+Variáveis de ambiente: `MIGRATOR_NUGET_CONFIG`, `MIGRATOR_LLM_CLIENT_ID`, `MIGRATOR_LLM_CLIENT_SECRET`, `MIGRATOR_LLM_MODEL`, `MIGRATOR_LLM_ENDPOINT`, `MIGRATOR_LLM_TOKEN_URL`, `MIGRATOR_LLM_SCOPE`, `HTTPS_PROXY`.
 
 ---
 
-## Estrutura do código e como estender
+## 14. Fluxo recomendado
+
+1. **`analyze`** em cada aplicação (ou `portfolio` na pasta) para dimensionar: bloqueantes por projeto, dados acessados, bancos compartilhados.
+2. **`migrate`** (lift-and-shift) e versione a saída imediatamente num repositório novo. Preencha os placeholders do `.iupipes.yml` e dos `parameters.json`, rode `_secrets/<projeto>/create-secrets.sh` e suba pela esteira.
+3. Para modernizar, **`migrate --target net10`** em outra pasta. Corrija na saída em ordem de dependência (bibliotecas primeiro), recompile, use o relatório como checklist, procure os `// TODO Migrator` e revise `_Legacy/`. Com `--llm`, boa parte do laço é fechada sozinha.
+4. **Teste o comportamento**, não só a compilação: autenticação, sessão, uploads, serialização JSON e rotas.
+5. Repita `portfolio --baseline` para acompanhar a evolução.
+
+> `migrate --force` **apaga e regera** a pasta de saída. Não use sobre uma saída com correções manuais; gere em outra pasta e compare.
+
+---
+
+## 15. Decisões de projeto e limitações
+
+- **Cópia, nunca in-place.** A saída fica fora da origem e pode ser repetida quantas vezes for preciso.
+- **Lift-and-shift primeiro.** O padrão não toca no código: o único ajuste é tirar URLs, e-mails e credenciais fixos, porque esses não podem ir para o repositório da plataforma. A modernização é opt-in.
+- **EC2 Windows antes de container.** Aplicações .NET Framework rodam em Windows; o relatório mostra a hospedagem Linux como alternativa pós-modernização, não como padrão.
+- **Preservar comportamento ao modernizar.** Web API mantém Newtonsoft.Json e PascalCase; EF6 fica na 6.5; `Encrypt=False` é adicionado às connection strings do SQL Server; `Nullable`/`ImplicitUsings` desligados; `AssemblyInfo.cs` preservado; `App.config` mantido quando há `Settings.settings`.
+- **Não inventar código onde há risco.** `IConfiguration` só é injetado onde não há ambiguidade; nas demais classes o erro de build aponta o lugar. O mesmo vale para `HttpContext.Current` fora de controllers. Literais em atributos, `case` e strings interpoladas não são externalizados.
+- **Segredos nunca em template, parâmetro ou git.** Só nomes; valores em `_secrets/` e no Secrets Manager.
+- **Compatibilidade verificada**: pacotes consultados no feed e saída compilada (net10).
+
+Limitações: VB.NET, Web Sites sem `.csproj`, F# e projetos de banco não são convertidos para .NET 10 (VB é copiado no destino framework). WebForms, WCF servidor, Identity 2, SignalR clássico e OAuth server do OWIN só entram no inventário. Reescritas por padrão de texto podem deixar passar casos incomuns; o build de verificação existe para isso. Erros de build aparecem em camadas. `COMReference` exige o MSBuild do Visual Studio.
+
+---
+
+## 16. Estrutura do código e como estender
 
 ```
 src/Migrator.Core
-  Analysis/     WorkspaceLoader (.sln/.slnx/pasta), ProjectLoader (.csproj), StartupAnalyzer (Global.asax/App_Start/OWIN), AssemblyInspector (DLLs),
-                ApplicationProfiler (sinais de arquitetura: banco, arquivos, filas, SMTP, sessão, agendamento, Windows, segredos...)
-  Cloud/        ModernizationAdvisor (pacotes + código + sinais → sugestões), AwsArchitect (hospedagem, serviços, Dockerfile, diagrama, plano),
-                LambdaScaffolder (Function.cs + aws-lambda-tools-defaults.json), InfrastructureGenerator (Terraform + workflow)
-  Llm/          ILlmAssistant (interface), OllamaAssistant, CachedLlmAssistant, LlmAssistantFactory, LlmSession (falha → segue sem LLM),
-                LlmCodeFixer (build → correção → build), LlmCodeDrafter (rascunhos .Migrator.cs.txt), LlmNarrator (leitura do arquiteto), LlmPrompts
-  Data/         PackageRules, FrameworkReferenceRules, CodeRules (C# e Razor), BuildHints,
-                ModernizationRules (pacotes: licença/descontinuados/equivalentes AWS), CodeModernizationRules (C# que compila mas muda)
-  Migration/    MigrationEngine (orquestração), ProjectMigrator (por projeto), ControllerRewriter (Roslyn), CodeTransformer,
-                RazorTransformer/BundleConfigParser, ConfigMigrator, PackagePlanner, PackageAligner, ProjectFileWriter,
-                ProgramGenerator, BuildVerifier, TextFiles
-  NuGet/        NuGetClient (versões, frameworks e dependências via API v3 do nuget.org)
-  Reporting/    HtmlReport, MarkdownReport, ExcelReport, CsvReport
-  Portfolio/    PortfolioRunner (descoberta + análise em lote), PortfolioAggregator (esforço, gaps, compartilhado, ondas, baseline), PortfolioReports
-src/Migrator.Cli      comandos analyze/migrate/portfolio (System.CommandLine + Spectre.Console)
-tests/Migrator.Tests  testes unitários e de ponta a ponta sobre samples/LegacyShop
+  Analysis/     WorkspaceLoader, ProjectLoader, StartupAnalyzer, AssemblyInspector, ApplicationProfiler (sinais), DataAccessAnalyzer
+  Cloud/        ModernizationAdvisor, AwsArchitect (+ .Framework), LambdaScaffolder, InfrastructureGenerator (Terraform),
+                CloudFormationGenerator (+ .Ec2, .EcsService, .Service: templates, parâmetros, CodeDeploy, .iupipes.yml, TAAC, workflows)
+  Llm/          ILlmAssistant, OllamaAssistant, CorporateApiAssistant, CachedLlmAssistant, LlmAssistantFactory, LlmSession,
+                LlmCodeFixer, LlmCodeDrafter, LlmTriage, LlmNarrator, LlmPrompts
+  Data/         PackageRules, FrameworkReferenceRules, CodeRules, BuildHints, ModernizationRules, CodeModernizationRules
+  Migration/    MigrationEngine (orquestração, layout da saída), ProjectMigrator (+ .Framework, .Settings), LiteralExternalizer,
+                ConfigSettingsCollector, SecretsExtractor, ControllerRewriter, WorkerServiceRewriter, ConfigurationInjector,
+                CodeTransformer, RazorTransformer, ConfigMigrator, PackagePlanner, PackageAligner, ProjectFileWriter,
+                ProgramGenerator, BuildVerifier, RuntimeVerifier
+  NuGet/        NuGetClient, NuGetConfigFile
+  Reporting/    HtmlReport, MarkdownReport, ExcelReport, CsvReport, JsonReport (+ .Cloud, .Data)
+  Portfolio/    PortfolioRunner, PortfolioAggregator, PortfolioReports
+src/Migrator.Cli      analyze / migrate / portfolio (System.CommandLine + Spectre.Console)
+tests/Migrator.Tests  163 testes unitários, de ponta a ponta sobre samples/LegacyShop e snapshots
 samples/LegacyShop    solução legada de exemplo
+docs/                 GitHub Pages (index.html, demo/, diagrams/)
 ```
 
-As regras ficam em `src/Migrator.Core/Data/`, e quase sempre basta acrescentar uma entrada nesses arquivos.
+Quase toda mudança de comportamento é uma entrada em `src/Migrator.Core/Data/`:
 
-**Novo pacote** (`PackageRules.cs`, dicionário `ById`):
+- **Pacote** (`PackageRules.ById`): `["Empresa.Logging.Legado"] = Replace("A API mudou: use ILogger<T>.", To("Empresa.Logging", VersionPolicy.Latest("3.0.0")))` ou `Manual("Depende de System.Web; use ...")`.
+- **Padrão de código** (`CodeRules.CSharp`/`Razor`): `new("EMP001", @"\bEmpresa\.Cache\.Get\(", InventorySeverity.Warning, "Cache corporativo antigo", "Sem versão para .NET 10.", "Use IDistributedCache.")`.
+- **Dica de build** (`BuildHints`): tipo em `TypeHints`, membro em `MemberHints` ou código em `CodeHints`.
+- **Modernização por pacote** (`ModernizationRules.ById`/`ByPrefix`): `Deprecated("MOD-PKG-EMPRESA-PDF", Impact.Medium, Effort.Medium, título, evidência, proposta)`; por código (`CodeModernizationRules.CSharp`) com `Kind`, `Impact`, `Effort`, `OnlyKinds` e `AwsService`.
+- **Sinal de arquitetura** (`ApplicationProfiler`): valor no enum `Signal` + regex em `CodeProbes` (ou prefixo em `PackageProbes`); use `profile.Has(Signal.X)` em `ModernizationAdvisor.FromProfile` e/ou em `AwsArchitect`.
+- **Infra**: `CloudFormationGenerator.*` e `InfrastructureGenerator`; valide com `cfn-lint infra/*.yml` e `terraform validate` sobre o sample.
 
-```csharp
-["Empresa.Logging.Legado"] = Replace("A API mudou: use ILogger<T>.", To("Empresa.Logging", VersionPolicy.Latest("3.0.0"))),
-["Empresa.Seguranca.Web"]  = Manual("Depende de System.Web; use a nova biblioteca Empresa.Seguranca.AspNetCore."),
-```
-
-**Novo padrão de código** (`CodeRules.cs`, lista `CSharp` ou `Razor`):
-
-```csharp
-new("EMP001", @"\bEmpresa\.Cache\.Get\(", InventorySeverity.Warning,
-    "Cache corporativo antigo",
-    "A biblioteca Empresa.Cache não tem versão para .NET 10.",
-    "Use IDistributedCache com a configuração padrão da empresa."),
-```
-
-**Dica para erro de compilação** (`BuildHints.cs`): acrescente o tipo em `TypeHints`, o membro em `MemberHints` ou o código do erro em `CodeHints`.
-
-**Nova sugestão de modernização por pacote** (`ModernizationRules.cs`, dicionário `ById` ou lista `ByPrefix`):
-
-```csharp
-["Empresa.Pdf.Legado"] = Deprecated("MOD-PKG-EMPRESA-PDF", Impact.Medium, Effort.Medium,
-    "Empresa.Pdf.Legado não tem versão para .NET 10",
-    "Depende de binários nativos Windows.",
-    "Use QuestPDF; para HTML→PDF, PuppeteerSharp em uma tarefa ECS."),
-```
-
-**Novo padrão de código C# que compila mas muda** (`CodeModernizationRules.cs`, lista `CSharp`): mesma forma das `CodeRules`, com `Kind`, `Impact`, `Effort`, filtro opcional por tipo de projeto (`OnlyKinds`) e `AwsService`.
-
-**Novo sinal de arquitetura** (`ApplicationProfiler.cs`): acrescente o valor no enum `Signal` e a regex em `CodeProbes` (ou o prefixo de pacote em `PackageProbes` / a referência em `FrameworkReferenceProbes`); depois use `profile.Has(Signal.X)` em `ModernizationAdvisor.FromProfile` (sugestão) e/ou em `AwsArchitect` (hospedagem/componente).
-
-**Testes**: `dotnet test Migrator.slnx`. Ao adicionar uma regra, inclua um caso em `tests/Migrator.Tests` e, se for um padrão comum, reproduza-o em `samples/LegacyShop`. Os **snapshots** (`tests/Migrator.Tests/Snapshots/*.snap`) congelam os arquivos gerados para o sample (csproj, Program.cs, Dockerfile, appsettings, Function.cs, Terraform, workflow): qualquer mudança de regra que altere a saída aparece como diff em `SnapshotTests`; se for intencional, aceite com `MIGRATOR_UPDATE_SNAPSHOTS=1 dotnet test --filter SnapshotTests` e revise o diff no commit. Para medir a evolução da ferramenta sobre aplicações reais, mantenha uma pasta com algumas delas e rode `portfolio` periodicamente com `--baseline` apontando para o `portfolio.json` anterior.
+**Testes**: `dotnet test Migrator.slnx`. Ao adicionar uma regra, inclua um caso em `tests/Migrator.Tests` e, se for padrão comum, reproduza-o em `samples/LegacyShop`. Os **snapshots** (`tests/Migrator.Tests/Snapshots/*.snap`) congelam os arquivos gerados para o sample; mudança intencional se aceita com `MIGRATOR_UPDATE_SNAPSHOTS=1 dotnet test --filter SnapshotTests` e revisa no diff do commit.

@@ -15,7 +15,7 @@ Option<string?> NuGetSource() => new("--nuget-source") { Description = "URL do s
 Option<string> Cloud() => new("--cloud") { Description = "Nuvem de destino para a proposta de arquitetura e os Dockerfiles: aws (padrão) ou none.", DefaultValueFactory = _ => "aws" };
 Option<string> Target() => new("--target") { Description = "Destino: framework (padrão, lift-and-shift: não altera o código, só eleva os projetos para .NET Framework 4.8.1 e hospeda em EC2 Windows) ou net10 (reescreve o código para .NET 10 e hospeda em ECS Fargate).", DefaultValueFactory = _ => "framework" };
 Option<bool> Serverless() => new("--serverless") { Description = "Recomenda AWS Lambda (e gera o handler/gatilhos) para automações orientadas a evento. Sem a opção, o foco é lift-and-shift: consoles e serviços mantêm o Main() e rodam como tarefa ECS agendada ou worker." };
-Option<string?> Iac() => new("--iac") { Description = "Infraestrutura como código gerada no migrate: cloudformation (padrão para framework; layout da plataforma: infra/service.yml + infra/{dev,hom,prod}/parameters.json) ou terraform (padrão para net10)." };
+Option<string?> Iac() => new("--iac") { Description = "Infraestrutura como código gerada no migrate: cloudformation (padrão nos dois destinos; layout da plataforma: infra/service.yml + infra/{dev,hom,prod}/parameters.json) ou terraform." };
 static Migrator.Core.Models.MigrationTarget ParseTarget(string? value) => value?.Trim().ToLowerInvariant() switch
 {
     "net10" or "net10.0" or "modern" or "core" => Migrator.Core.Models.MigrationTarget.Net10,
