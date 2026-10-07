@@ -23,6 +23,7 @@ public static partial class ProjectMigrator
         var sources = project.SourceFiles.Where(f => File.Exists(f.FullPath))
             .Select(f => (Path.GetRelativePath(project.ProjectDir, f.FullPath).Replace('\\', '/'), TextFiles.Read(f.FullPath).Text)).ToList();
         var profile = ApplicationProfiler.Analyze(project, sources, LoadConfig(project));
+        var inspections = InspectBinaries(project, profile);
         // Behaviour changes on .NET 10/Linux (MOD-CS-*) and Windows dependencies with Linux replacements (MOD-WIN-*) do not apply when the code stays on .NET Framework/Windows.
         result.Modernizations.AddRange(ModernizationAdvisor.Analyze(project, profile, sources, ctx.Cloud)
             .Where(m => !m.RuleId.StartsWith("MOD-CS-", StringComparison.Ordinal) && !m.RuleId.StartsWith("MOD-WIN-", StringComparison.Ordinal)));
@@ -126,6 +127,7 @@ public static partial class ProjectMigrator
                     "Nenhuma ação necessária.", Path.GetFileName(config), auto: true));
         }
 
+        ReportBinaryCompatibility(project, inspections, items);
         if (profile.HasAny(Signal.SecretsInConfig, Signal.SecretsInCode))
             items.Add(Item(project, InventorySeverity.Warning, InventoryCategory.Configuration, "CFG-FX-SECRETS",
                 "Credenciais permanecem no web.config/app.config",

@@ -140,7 +140,7 @@ Lista dos arquivos criados, alterados ou excluidos em cada commit da evolucao pa
 
 22 arquivos.
 
-## Commit seguinte — docs: README reestruturado, GitHub Pages e lista de arquivos por commit
+## 85f97d5 (2026-10-07) — docs: README reestruturado, GitHub Pages e lista de arquivos por commit
 
 | Status | Arquivo |
 |---|---|
@@ -150,3 +150,28 @@ Lista dos arquivos criados, alterados ou excluidos em cada commit da evolucao pa
 | alterado | `src/Migrator.Cli/Program.cs` |
 
 4 arquivos.
+
+## Commit seguinte — feat: inspecao de DLLs locais por tipo, membro e P/Invoke
+
+| Status | Arquivo |
+|---|---|
+| alterado | `ARQUIVOS-ALTERADOS.md` |
+| alterado | `CLAUDE.md` |
+| alterado | `README.md` |
+| alterado | `docs/demo/migration-report.html` |
+| alterado | `docs/demo/migration-report.md` |
+| criado | `samples/LegacyShop/lib/Legacy.Impressao.dll` |
+| criado | `samples/LegacyShop/lib/README.md` |
+| criado | `samples/LegacyShop/lib/src/Legacy.Impressao/ImpressoraEtiquetas.cs` |
+| alterado | `samples/LegacyShop/LegacyShop.Relatorios/GeradorRelatorio.vb` |
+| alterado | `samples/LegacyShop/LegacyShop.Relatorios/LegacyShop.Relatorios.vbproj` |
+| alterado | `src/Migrator.Core/Analysis/ApplicationProfiler.cs` |
+| alterado | `src/Migrator.Core/Analysis/AssemblyInspector.cs` |
+| criado | `src/Migrator.Core/Migration/ProjectMigrator.Binaries.cs` |
+| alterado | `src/Migrator.Core/Migration/ProjectMigrator.Framework.cs` |
+| alterado | `src/Migrator.Core/Migration/ProjectMigrator.cs` |
+| criado | `tests/Migrator.Tests/AssemblyInspectorTests.cs` |
+| alterado | `tests/Migrator.Tests/FrameworkTargetTests.cs` |
+| alterado | `tests/Migrator.Tests/SampleSolutionTests.cs` |
+
+18 arquivos.

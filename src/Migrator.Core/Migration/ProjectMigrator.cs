@@ -121,6 +121,7 @@ public static partial class ProjectMigrator
         // where legacy APIs (System.Messaging, SmtpClient, Session[...]) are still recognizable.
         var originalCode = entries.Where(e => e.Role is Role.Code or Role.LegacyCode).Select(e => (e.Unix, e.Text!)).ToList();
         var profile = ApplicationProfiler.Analyze(project, originalCode, LoadConfig(project));
+        InspectBinaries(project, profile);     // what the local DLLs use counts as much as the code (hosting, MOD-WIN-*)
         result.Modernizations.AddRange(ModernizationAdvisor.Analyze(project, profile, originalCode, ctx.Cloud));
         result.DataScan = DataAccessAnalyzer.Scan(project, originalCode.Concat(DataFiles(project)));
 
@@ -273,6 +274,7 @@ public static partial class ProjectMigrator
         var packages = await ctx.Planner.PlanAsync(project, requirements);
         items.AddRange(packages.Items);
 
+        ApplyBinaryFacts(project, facts);
         var spec = BuildProjectSpec(project, ctx, entries, facts, config, packages, plan, items, result.RelativeDir);
         if (secrets.Any && project.Kind != ProjectKind.ClassLibrary && spec.Properties.All(p => p.Name != "UserSecretsId"))
             spec.Properties.Add(("UserSecretsId", SecretsExtractor.UserSecretsId(ctx.SolutionName, project.Name)));
@@ -318,8 +320,10 @@ public static partial class ProjectMigrator
         var sources = project.SourceFiles.Where(f => File.Exists(f.FullPath))
             .Select(f => (Path.GetRelativePath(project.ProjectDir, f.FullPath).Replace('\\', '/'), TextFiles.Read(f.FullPath).Text)).ToList();
         var profile = ApplicationProfiler.Analyze(project, sources, LoadConfig(project));
+        var inspections = InspectBinaries(project, profile);
         result.Modernizations.AddRange(ModernizationAdvisor.Analyze(project, profile, [], ctx.Cloud));
         result.DataScan = DataAccessAnalyzer.Scan(project, sources.Concat(DataFiles(project)));
+        ReportBinaryCompatibility(project, inspections, items, "O projeto VB.NET não foi convertido; ao convertê-lo, esta DLL precisa ser tratada antes de rodar em .NET 10/Linux.");
 
         var lines = sources.Sum(s => s.Item2.Count(c => c == '\n') + 1);
         var markup = project.Items.Select(i => Path.GetRelativePath(project.ProjectDir, i.FullPath)).Where(r => WebFormsMarkup.Contains(Path.GetExtension(r))).ToList();
@@ -1008,22 +1012,7 @@ public static partial class ProjectMigrator
         spec.References.Add((binary.Name, hint));
 
         var inspection = AssemblyInspector.Inspect(binary.HintPath);
-        var (severity, description, suggestion) = inspection switch
-        {
-            { ReferencesSystemWeb: true } => (InventorySeverity.Breaking,
-                $"A DLL depende de System.Web ({inspection.TargetFramework ?? ".NET Framework"}) e não funcionará no .NET 10.",
-                "Obtenha uma versão da biblioteca para .NET moderno ou reescreva a funcionalidade."),
-            { Flavor: AssemblyFlavor.Modern } => (InventorySeverity.Info,
-                $"Compilada para {inspection.TargetFramework ?? "netstandard/.NET"}: compatível.",
-                "Considere publicar a DLL como pacote NuGet interno."),
-            { Flavor: AssemblyFlavor.NetFramework } => (InventorySeverity.Warning,
-                $"Compilada para {inspection.TargetFramework ?? ".NET Framework"}. Costuma carregar no .NET 10, mas falha se usar APIs removidas (AppDomain, Remoting, WCF server, System.Web...).",
-                "Teste os fluxos que usam a DLL; o ideal é recompilá-la para netstandard2.0/net10.0 ou trocar por pacote NuGet."),
-            { Flavor: AssemblyFlavor.NotManaged } => (InventorySeverity.Warning,
-                "DLL nativa referenciada como assembly .NET.",
-                "Copie a DLL nativa para a saída (<None Include=... CopyToOutputDirectory=PreserveNewest />) e acesse via P/Invoke."),
-            _ => (InventorySeverity.Warning, "Não foi possível identificar o framework da DLL.", "Teste os fluxos que usam a DLL.")
-        };
+        var (severity, description, suggestion) = DescribeBinary(inspection);
         items.Add(Item(project, severity, InventoryCategory.ProjectFile, "PRJ-DLL", $"Referência a DLL local: {binary.Name}", description, suggestion, hint,
             auto: severity == InventorySeverity.Info));
     }

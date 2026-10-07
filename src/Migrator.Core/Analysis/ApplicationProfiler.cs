@@ -281,7 +281,11 @@ public static partial class ApplicationProfiler
                 profile.Add(signal, null, reference);
 
         if (project.ComReferences.Count > 0)
-            foreach (var com in project.ComReferences) profile.Add(Signal.Com, null, $"COMReference {com}");
+            foreach (var com in project.ComReferences)
+            {
+                var include = System.Text.RegularExpressions.Regex.Match(com, "Include=\"([^\"]+)\"");
+                profile.Add(Signal.Com, null, "COMReference " + (include.Success ? include.Groups[1].Value : com));
+            }
         if (project.UsesWinForms) profile.Add(Signal.WinForms);
         if (project.UsesWpf) profile.Add(Signal.Wpf);
 

@@ -93,6 +93,10 @@ public sealed class FrameworkTargetTests : IDisposable
         // Hosting: every deployable on EC2 Windows, with the .NET 10 answer next to it.
         foreach (var p in result.Projects.Where(p => p.Project.Kind is ProjectKind.Web or ProjectKind.Console or ProjectKind.WindowsService))
             Assert.Equal(AwsHosting.Ec2Windows, p.Hosting!.Primary);
+        // Local DLLs are inspected on this target too: informational, but the .NET 10 alternative already accounts for them.
+        var relatorios = result.Projects.Single(p => p.Project.Name == "LegacyShop.Relatorios");
+        Assert.Contains(relatorios.Inventory, i => i.RuleId == "PRJ-DLL" && i.Severity == InventorySeverity.Info && i.Title.Contains("Legacy.Impressao") && i.Description.Contains("Nada muda no destino .NET Framework"));
+        Assert.Contains(relatorios.Hosting!.Rationale, r => r.Contains("Registro do Windows (DLL Legacy.Impressao)"));
         Assert.Contains(web.Hosting!.Rationale, r => r.Contains("ECS Fargate (Linux) + ALB"));
         Assert.Contains(result.Projects[4].Hosting!.Rationale, r => r.Contains("AWS Lambda"));
         Assert.Contains(result.Projects[4].Hosting!.Prerequisites, p => p.Contains("FSx"));

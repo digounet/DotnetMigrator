@@ -110,6 +110,17 @@ public sealed class SampleSolutionTests : IDisposable
         Assert.Contains(relatorios.Hosting.Prerequisites, p => p.Contains("VB.NET"));
         Assert.Contains(relatorios.Modernizations, m => m.RuleId == "MOD-WIN-COM");
         Assert.Contains(relatorios.Modernizations, m => m.RuleId == "MOD-ARCH-SMTP");
+        // Local DLL metadata counts as code: Legacy.Impressao.dll uses the Registry, winspool.drv and the Event Log.
+        Assert.Contains(relatorios.Hosting.HardWindowsDependencies, d => d.Contains("Registro do Windows") && d.Contains("DLL Legacy.Impressao"));
+        Assert.Contains(relatorios.Modernizations, m => m.RuleId == "MOD-WIN-REGISTRY" && m.Evidence!.Contains("Legacy.Impressao"));
+        Assert.Contains(relatorios.Modernizations, m => m.RuleId == "MOD-WIN-PINVOKE");
+        var impressao = Assert.Single(relatorios.Inventory, i => i.RuleId == "PRJ-DLL");
+        Assert.Equal(InventorySeverity.Info, impressao.Severity);
+        Assert.Contains("P/Invoke em winspool.drv", impressao.Title);
+        Assert.Contains("BinaryFormatter", impressao.Description);
+        var barcode = Assert.Single(web.Inventory, i => i.RuleId == "PRJ-DLL");
+        Assert.Equal(InventorySeverity.Breaking, barcode.Severity);                                  // references System.Web: cannot load on .NET 10
+        Assert.Contains("System.Web", barcode.Description);
         Assert.Contains(relatorios.Modernizations, m => m.RuleId == "MOD-ARCH-FILES"); // \\arquivos\relatorios in VB code (case-insensitive probes)
         Assert.Contains("VB.NET (não convertido)", result.Architecture!.Summary);
 

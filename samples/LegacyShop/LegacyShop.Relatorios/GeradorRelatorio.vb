@@ -27,6 +27,8 @@ Public Class GeradorRelatorio
             End While
             pasta.SaveAs(destino)
             excel.Quit()
+            ' Etiqueta de protocolo do relatorio na impressora da expedicao (biblioteca interna, so Windows).
+            Legacy.Impressao.ImpressoraEtiquetas.Imprimir("^XA^FO50,50^ADN,36,20^FDRelatorio " & mes & "/" & ano & "^FS^XZ")
         End Using
 
         Using cliente As New Net.Mail.SmtpClient()
