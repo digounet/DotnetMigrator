@@ -1,232 +1,99 @@
-# Arquivos alterados por commit
+# Arquivos alterados (lista consolidada)
 
-Lista dos arquivos criados, alterados ou excluidos em cada commit da evolucao para o layout da plataforma (lift-and-shift, CloudFormation, dados acessados, LLM corporativa). Gerada com `git show --name-status`; a secao do ultimo commit foi montada a partir do `git status` antes dele ser feito.
+Todos os arquivos criados, alterados, renomeados ou excluidos desde o commit anterior a `6cea52b` (base `4727f6f`) ate `4c0e318`, para levar as mudancas manualmente ao repositorio do banco. O status e o resultado final do intervalo, nao de cada commit: um arquivo criado e depois alterado aparece como criado; criado e depois excluido nao aparece.
 
-## 6cea52b (2026-10-04) — feat: private NuGet feed (nuget.config) support and net10.0 upgrade of already-modern projects
+Para regenerar: `git diff --name-status -M <base> HEAD` (o `<base>` e o commit anterior ao primeiro que voce ainda nao levou).
 
-| Status | Arquivo |
-|---|---|
-| alterado | `CLAUDE.md` |
-| alterado | `README.md` |
-| alterado | `src/Migrator.Cli/Program.cs` |
-| alterado | `src/Migrator.Cli/RunCommand.cs` |
-| alterado | `src/Migrator.Core/Cloud/AwsArchitect.cs` |
-| alterado | `src/Migrator.Core/Migration/MigrationEngine.cs` |
-| criado | `src/Migrator.Core/Migration/ModernProjectUpdater.cs` |
-| alterado | `src/Migrator.Core/Migration/PackagePlanner.cs` |
-| alterado | `src/Migrator.Core/Migration/ProjectMigrator.cs` |
-| alterado | `src/Migrator.Core/Models/MigrationResult.cs` |
-| alterado | `src/Migrator.Core/NuGet/NuGetClient.cs` |
-| criado | `src/Migrator.Core/NuGet/NuGetSource.cs` |
-| alterado | `src/Migrator.Core/Portfolio/PortfolioModels.cs` |
-| alterado | `src/Migrator.Core/Portfolio/PortfolioRunner.cs` |
-| alterado | `src/Migrator.Core/Reporting/HtmlReport.cs` |
-| alterado | `src/Migrator.Core/Reporting/MarkdownReport.cs` |
-| alterado | `src/Migrator.Core/Reporting/ReportWriter.cs` |
-| criado | `tests/Migrator.Tests/NuGetSourceTests.cs` |
-| alterado | `tests/Migrator.Tests/Snapshots/LegacyShop.Web_Dockerfile.snap` |
+**Total: 79 arquivos** (34 criados, 45 alterados, 0 renomeados, 0 excluidos).
 
-19 arquivos.
+## Criados (34)
 
-## cde9355 (2026-10-06) — feat: destino .NET Framework 4.8.1 com CloudFormation e inventario de dados acessados
+- `ARQUIVOS-ALTERADOS.md`
+- `samples/LegacyShop/lib/Legacy.Impressao.dll`
+- `samples/LegacyShop/lib/README.md`
+- `samples/LegacyShop/lib/src/Legacy.Impressao/ImpressoraEtiquetas.cs`
+- `src/Migrator.Core/Analysis/DataAccessAnalyzer.cs`
+- `src/Migrator.Core/Cloud/AwsArchitect.Framework.cs`
+- `src/Migrator.Core/Cloud/CloudFormationGenerator.Ec2.cs`
+- `src/Migrator.Core/Cloud/CloudFormationGenerator.EcsService.cs`
+- `src/Migrator.Core/Cloud/CloudFormationGenerator.Guide.cs`
+- `src/Migrator.Core/Cloud/CloudFormationGenerator.Service.cs`
+- `src/Migrator.Core/Cloud/CloudFormationGenerator.cs`
+- `src/Migrator.Core/Llm/CorporateApiAssistant.cs`
+- `src/Migrator.Core/Migration/ConfigSettingsCollector.cs`
+- `src/Migrator.Core/Migration/LiteralExternalizer.cs`
+- `src/Migrator.Core/Migration/ModernProjectUpdater.cs`
+- `src/Migrator.Core/Migration/ProjectMigrator.Binaries.cs`
+- `src/Migrator.Core/Migration/ProjectMigrator.Framework.cs`
+- `src/Migrator.Core/Migration/ProjectMigrator.Settings.cs`
+- `src/Migrator.Core/Models/DataAccess.cs`
+- `src/Migrator.Core/Models/DeploymentGuide.cs`
+- `src/Migrator.Core/Models/ExternalizedSetting.cs`
+- `src/Migrator.Core/NuGet/NuGetSource.cs`
+- `src/Migrator.Core/Reporting/ExcelReport.Data.cs`
+- `src/Migrator.Core/Reporting/ExcelReport.Deployment.cs`
+- `src/Migrator.Core/Reporting/HtmlReport.Data.cs`
+- `src/Migrator.Core/Reporting/HtmlReport.Deployment.cs`
+- `src/Migrator.Core/Reporting/MarkdownReport.Data.cs`
+- `src/Migrator.Core/Reporting/MarkdownReport.Deployment.cs`
+- `tests/Migrator.Tests/AssemblyInspectorTests.cs`
+- `tests/Migrator.Tests/CorporateApiAssistantTests.cs`
+- `tests/Migrator.Tests/DataAccessAnalyzerTests.cs`
+- `tests/Migrator.Tests/FrameworkTargetTests.cs`
+- `tests/Migrator.Tests/LiteralExternalizerTests.cs`
+- `tests/Migrator.Tests/NuGetSourceTests.cs`
 
-| Status | Arquivo |
-|---|---|
-| alterado | `CLAUDE.md` |
-| alterado | `README.md` |
-| alterado | `docs/demo/migration-report.html` |
-| alterado | `docs/demo/migration-report.md` |
-| alterado | `src/Migrator.Cli/Program.cs` |
-| alterado | `src/Migrator.Cli/RunCommand.cs` |
-| criado | `src/Migrator.Core/Analysis/DataAccessAnalyzer.cs` |
-| criado | `src/Migrator.Core/Cloud/AwsArchitect.Framework.cs` |
-| alterado | `src/Migrator.Core/Cloud/AwsArchitect.cs` |
-| criado | `src/Migrator.Core/Cloud/CloudFormationGenerator.Ec2.cs` |
-| criado | `src/Migrator.Core/Cloud/CloudFormationGenerator.Ecs.cs` |
-| criado | `src/Migrator.Core/Cloud/CloudFormationGenerator.cs` |
-| alterado | `src/Migrator.Core/Cloud/InfrastructureGenerator.cs` |
-| alterado | `src/Migrator.Core/Migration/MigrationEngine.cs` |
-| criado | `src/Migrator.Core/Migration/ProjectMigrator.Framework.cs` |
-| alterado | `src/Migrator.Core/Migration/ProjectMigrator.cs` |
-| alterado | `src/Migrator.Core/Models/CloudArchitecture.cs` |
-| criado | `src/Migrator.Core/Models/DataAccess.cs` |
-| alterado | `src/Migrator.Core/Models/MigrationResult.cs` |
-| alterado | `src/Migrator.Core/Portfolio/PortfolioModels.cs` |
-| alterado | `src/Migrator.Core/Portfolio/PortfolioRunner.cs` |
-| alterado | `src/Migrator.Core/Reporting/CsvReport.cs` |
-| criado | `src/Migrator.Core/Reporting/ExcelReport.Data.cs` |
-| alterado | `src/Migrator.Core/Reporting/ExcelReport.cs` |
-| criado | `src/Migrator.Core/Reporting/HtmlReport.Data.cs` |
-| alterado | `src/Migrator.Core/Reporting/HtmlReport.cs` |
-| alterado | `src/Migrator.Core/Reporting/JsonReport.cs` |
-| criado | `src/Migrator.Core/Reporting/MarkdownReport.Data.cs` |
-| alterado | `src/Migrator.Core/Reporting/MarkdownReport.cs` |
-| alterado | `src/Migrator.Core/Reporting/ReportWriter.cs` |
-| criado | `tests/Migrator.Tests/DataAccessAnalyzerTests.cs` |
-| criado | `tests/Migrator.Tests/FrameworkTargetTests.cs` |
-| alterado | `tests/Migrator.Tests/SampleSolutionTests.cs` |
+## Alterados (45)
 
-33 arquivos.
+- `ARQUIVOS-ALTERADOS.md`
+- `CLAUDE.md`
+- `README.md`
+- `docs/demo/migration-report.html`
+- `docs/demo/migration-report.md`
+- `docs/index.html`
+- `samples/LegacyShop/LegacyShop.Relatorios/GeradorRelatorio.vb`
+- `samples/LegacyShop/LegacyShop.Relatorios/LegacyShop.Relatorios.vbproj`
+- `samples/LegacyShop/LegacyShop.Web/Helpers/AppConfig.cs`
+- `src/Migrator.Cli/Program.cs`
+- `src/Migrator.Cli/RunCommand.cs`
+- `src/Migrator.Core/Analysis/ApplicationProfiler.cs`
+- `src/Migrator.Core/Analysis/AssemblyInspector.cs`
+- `src/Migrator.Core/Cloud/AwsArchitect.cs`
+- `src/Migrator.Core/Cloud/InfrastructureGenerator.cs`
+- `src/Migrator.Core/Llm/ILlmAssistant.cs`
+- `src/Migrator.Core/Llm/LlmAssistantFactory.cs`
+- `src/Migrator.Core/Migration/MigrationEngine.cs`
+- `src/Migrator.Core/Migration/PackagePlanner.cs`
+- `src/Migrator.Core/Migration/ProjectMigrator.cs`
+- `src/Migrator.Core/Migration/SecretsExtractor.cs`
+- `src/Migrator.Core/Models/CloudArchitecture.cs`
+- `src/Migrator.Core/Models/MigrationResult.cs`
+- `src/Migrator.Core/NuGet/NuGetClient.cs`
+- `src/Migrator.Core/Portfolio/PortfolioModels.cs`
+- `src/Migrator.Core/Portfolio/PortfolioRunner.cs`
+- `src/Migrator.Core/Reporting/CsvReport.cs`
+- `src/Migrator.Core/Reporting/ExcelReport.cs`
+- `src/Migrator.Core/Reporting/HtmlReport.Cloud.cs`
+- `src/Migrator.Core/Reporting/HtmlReport.cs`
+- `src/Migrator.Core/Reporting/JsonReport.cs`
+- `src/Migrator.Core/Reporting/MarkdownReport.Cloud.cs`
+- `src/Migrator.Core/Reporting/MarkdownReport.cs`
+- `src/Migrator.Core/Reporting/ReportWriter.cs`
+- `tests/Migrator.Tests/IacGenerationTests.cs`
+- `tests/Migrator.Tests/LlmTests.cs`
+- `tests/Migrator.Tests/ModernizationAndCloudTests.cs`
+- `tests/Migrator.Tests/PortfolioTests.cs`
+- `tests/Migrator.Tests/SampleSolutionTests.cs`
+- `tests/Migrator.Tests/SnapshotTests.cs`
+- `tests/Migrator.Tests/Snapshots/.github_workflows_deploy.yml.snap`
+- `tests/Migrator.Tests/Snapshots/LegacyShop.Web_Dockerfile.snap`
+- `tests/Migrator.Tests/Snapshots/LegacyShop.Web_appsettings.json.snap`
+- `tests/Migrator.Tests/Snapshots/infra_terraform_ecs.tf.snap`
+- `tests/Migrator.Tests/Snapshots/infra_terraform_lambda.tf.snap`
 
-## 6ad6bc4 (2026-10-06) — feat: lift-and-shift como padrao, literais externalizados e CloudFormation no layout da plataforma
+## Como aplicar no banco
 
-| Status | Arquivo |
-|---|---|
-| alterado | `CLAUDE.md` |
-| alterado | `README.md` |
-| alterado | `docs/demo/migration-report.html` |
-| alterado | `docs/demo/migration-report.md` |
-| alterado | `samples/LegacyShop/LegacyShop.Web/Helpers/AppConfig.cs` |
-| alterado | `src/Migrator.Cli/Program.cs` |
-| alterado | `src/Migrator.Core/Cloud/AwsArchitect.Framework.cs` |
-| alterado | `src/Migrator.Core/Cloud/AwsArchitect.cs` |
-| alterado | `src/Migrator.Core/Cloud/CloudFormationGenerator.Ec2.cs` |
-| excluido | `src/Migrator.Core/Cloud/CloudFormationGenerator.Ecs.cs` |
-| criado | `src/Migrator.Core/Cloud/CloudFormationGenerator.Service.cs` |
-| alterado | `src/Migrator.Core/Cloud/CloudFormationGenerator.cs` |
-| alterado | `src/Migrator.Core/Cloud/InfrastructureGenerator.cs` |
-| criado | `src/Migrator.Core/Migration/ConfigSettingsCollector.cs` |
-| criado | `src/Migrator.Core/Migration/LiteralExternalizer.cs` |
-| alterado | `src/Migrator.Core/Migration/MigrationEngine.cs` |
-| alterado | `src/Migrator.Core/Migration/ProjectMigrator.Framework.cs` |
-| criado | `src/Migrator.Core/Migration/ProjectMigrator.Settings.cs` |
-| alterado | `src/Migrator.Core/Migration/ProjectMigrator.cs` |
-| alterado | `src/Migrator.Core/Migration/SecretsExtractor.cs` |
-| criado | `src/Migrator.Core/Models/ExternalizedSetting.cs` |
-| alterado | `src/Migrator.Core/Models/MigrationResult.cs` |
-| alterado | `src/Migrator.Core/Portfolio/PortfolioModels.cs` |
-| alterado | `src/Migrator.Core/Portfolio/PortfolioRunner.cs` |
-| alterado | `tests/Migrator.Tests/FrameworkTargetTests.cs` |
-| alterado | `tests/Migrator.Tests/IacGenerationTests.cs` |
-| criado | `tests/Migrator.Tests/LiteralExternalizerTests.cs` |
-| alterado | `tests/Migrator.Tests/LlmTests.cs` |
-| alterado | `tests/Migrator.Tests/ModernizationAndCloudTests.cs` |
-| alterado | `tests/Migrator.Tests/NuGetSourceTests.cs` |
-| alterado | `tests/Migrator.Tests/PortfolioTests.cs` |
-| alterado | `tests/Migrator.Tests/SampleSolutionTests.cs` |
-| alterado | `tests/Migrator.Tests/SnapshotTests.cs` |
-| alterado | `tests/Migrator.Tests/Snapshots/LegacyShop.Web_appsettings.json.snap` |
-| alterado | `tests/Migrator.Tests/Snapshots/infra_terraform_ecs.tf.snap` |
-| alterado | `tests/Migrator.Tests/Snapshots/infra_terraform_lambda.tf.snap` |
-
-36 arquivos.
-
-## ea6fd1e (2026-10-07) — feat: layout do repositorio do banco, service.yml fiel a plataforma e LLM corporativa via API
-
-| Status | Arquivo |
-|---|---|
-| alterado | `CLAUDE.md` |
-| alterado | `README.md` |
-| alterado | `docs/demo/migration-report.html` |
-| alterado | `docs/demo/migration-report.md` |
-| alterado | `src/Migrator.Cli/Program.cs` |
-| alterado | `src/Migrator.Core/Cloud/CloudFormationGenerator.Ec2.cs` |
-| criado | `src/Migrator.Core/Cloud/CloudFormationGenerator.EcsService.cs` |
-| alterado | `src/Migrator.Core/Cloud/CloudFormationGenerator.Service.cs` |
-| alterado | `src/Migrator.Core/Cloud/CloudFormationGenerator.cs` |
-| alterado | `src/Migrator.Core/Cloud/InfrastructureGenerator.cs` |
-| criado | `src/Migrator.Core/Llm/CorporateApiAssistant.cs` |
-| alterado | `src/Migrator.Core/Llm/ILlmAssistant.cs` |
-| alterado | `src/Migrator.Core/Llm/LlmAssistantFactory.cs` |
-| alterado | `src/Migrator.Core/Migration/MigrationEngine.cs` |
-| alterado | `src/Migrator.Core/Models/MigrationResult.cs` |
-| criado | `tests/Migrator.Tests/CorporateApiAssistantTests.cs` |
-| alterado | `tests/Migrator.Tests/FrameworkTargetTests.cs` |
-| alterado | `tests/Migrator.Tests/IacGenerationTests.cs` |
-| alterado | `tests/Migrator.Tests/NuGetSourceTests.cs` |
-| alterado | `tests/Migrator.Tests/SampleSolutionTests.cs` |
-| alterado | `tests/Migrator.Tests/SnapshotTests.cs` |
-| alterado | `tests/Migrator.Tests/Snapshots/.github_workflows_deploy.yml.snap` |
-
-22 arquivos.
-
-## 85f97d5 (2026-10-07) — docs: README reestruturado, GitHub Pages e lista de arquivos por commit
-
-| Status | Arquivo |
-|---|---|
-| criado | `ARQUIVOS-ALTERADOS.md` |
-| alterado | `README.md` |
-| alterado | `docs/index.html` |
-| alterado | `src/Migrator.Cli/Program.cs` |
-
-4 arquivos.
-
-## cefd6e3 (2026-10-07) — feat: inspecao de DLLs locais por tipo, membro e P/Invoke
-
-| Status | Arquivo |
-|---|---|
-| alterado | `ARQUIVOS-ALTERADOS.md` |
-| alterado | `CLAUDE.md` |
-| alterado | `README.md` |
-| alterado | `docs/demo/migration-report.html` |
-| alterado | `docs/demo/migration-report.md` |
-| criado | `samples/LegacyShop/lib/Legacy.Impressao.dll` |
-| criado | `samples/LegacyShop/lib/README.md` |
-| criado | `samples/LegacyShop/lib/src/Legacy.Impressao/ImpressoraEtiquetas.cs` |
-| alterado | `samples/LegacyShop/LegacyShop.Relatorios/GeradorRelatorio.vb` |
-| alterado | `samples/LegacyShop/LegacyShop.Relatorios/LegacyShop.Relatorios.vbproj` |
-| alterado | `src/Migrator.Core/Analysis/ApplicationProfiler.cs` |
-| alterado | `src/Migrator.Core/Analysis/AssemblyInspector.cs` |
-| criado | `src/Migrator.Core/Migration/ProjectMigrator.Binaries.cs` |
-| alterado | `src/Migrator.Core/Migration/ProjectMigrator.Framework.cs` |
-| alterado | `src/Migrator.Core/Migration/ProjectMigrator.cs` |
-| criado | `tests/Migrator.Tests/AssemblyInspectorTests.cs` |
-| alterado | `tests/Migrator.Tests/FrameworkTargetTests.cs` |
-| alterado | `tests/Migrator.Tests/SampleSolutionTests.cs` |
-
-18 arquivos.
-
-## 5562d4a (2026-10-07) — feat: relatorio como guia de implantacao na AWS
-
-| Status | Arquivo |
-|---|---|
-| alterado | `ARQUIVOS-ALTERADOS.md` |
-| alterado | `CLAUDE.md` |
-| alterado | `README.md` |
-| alterado | `docs/demo/migration-report.html` |
-| alterado | `docs/demo/migration-report.md` |
-| alterado | `docs/index.html` |
-| criado | `src/Migrator.Core/Cloud/CloudFormationGenerator.Guide.cs` |
-| alterado | `src/Migrator.Core/Cloud/CloudFormationGenerator.cs` |
-| alterado | `src/Migrator.Core/Migration/MigrationEngine.cs` |
-| criado | `src/Migrator.Core/Models/DeploymentGuide.cs` |
-| alterado | `src/Migrator.Core/Models/MigrationResult.cs` |
-| criado | `src/Migrator.Core/Reporting/ExcelReport.Deployment.cs` |
-| alterado | `src/Migrator.Core/Reporting/ExcelReport.cs` |
-| alterado | `src/Migrator.Core/Reporting/HtmlReport.Cloud.cs` |
-| alterado | `src/Migrator.Core/Reporting/HtmlReport.Data.cs` |
-| criado | `src/Migrator.Core/Reporting/HtmlReport.Deployment.cs` |
-| alterado | `src/Migrator.Core/Reporting/HtmlReport.cs` |
-| alterado | `src/Migrator.Core/Reporting/JsonReport.cs` |
-| alterado | `src/Migrator.Core/Reporting/MarkdownReport.Cloud.cs` |
-| alterado | `src/Migrator.Core/Reporting/MarkdownReport.Data.cs` |
-| criado | `src/Migrator.Core/Reporting/MarkdownReport.Deployment.cs` |
-| alterado | `src/Migrator.Core/Reporting/MarkdownReport.cs` |
-| alterado | `tests/Migrator.Tests/FrameworkTargetTests.cs` |
-| alterado | `tests/Migrator.Tests/SampleSolutionTests.cs` |
-
-24 arquivos.
-
-## d679a2f (2026-10-07) — docs: pages com guia de implantacao e inspecao de DLLs
-
-| Status | Arquivo |
-|---|---|
-| alterado | `ARQUIVOS-ALTERADOS.md` |
-| alterado | `docs/index.html` |
-
-2 arquivos.
-
-## Commit seguinte — fix: tabelas do guia de implantacao cabem na tela
-
-| Status | Arquivo |
-|---|---|
-| alterado | `ARQUIVOS-ALTERADOS.md` |
-| alterado | `docs/demo/migration-report.html` |
-| alterado | `docs/demo/migration-report.md` |
-| alterado | `src/Migrator.Core/Cloud/CloudFormationGenerator.Guide.cs` |
-| alterado | `src/Migrator.Core/Reporting/HtmlReport.Deployment.cs` |
-| alterado | `src/Migrator.Core/Reporting/HtmlReport.cs` |
-| alterado | `src/Migrator.Core/Reporting/MarkdownReport.Deployment.cs` |
-| alterado | `src/Migrator.Core/Reporting/ReportWriter.cs` |
-
-8 arquivos.
+1. Copie os arquivos **criados** e **alterados** para o mesmo caminho relativo no repositorio do banco (substituindo os existentes).
+2. Exclua os **excluidos** e aplique os **renomeados** (apague o caminho antigo, crie o novo).
+3. `dotnet build Migrator.slnx -warnaserror` e `dotnet test Migrator.slnx` devem passar (165 testes).
+4. Preencha `DefaultEndpoint`/`DefaultTokenUrl` em `src/Migrator.Core/Llm/CorporateApiAssistant.cs` com o gateway do banco.
