@@ -176,7 +176,7 @@ Lista dos arquivos criados, alterados ou excluidos em cada commit da evolucao pa
 
 18 arquivos.
 
-## Commit seguinte — feat: relatorio como guia de implantacao na AWS
+## 5562d4a (2026-10-07) — feat: relatorio como guia de implantacao na AWS
 
 | Status | Arquivo |
 |---|---|
@@ -206,3 +206,12 @@ Lista dos arquivos criados, alterados ou excluidos em cada commit da evolucao pa
 | alterado | `tests/Migrator.Tests/SampleSolutionTests.cs` |
 
 24 arquivos.
+
+## Commit seguinte — docs: pages com guia de implantacao e inspecao de DLLs
+
+| Status | Arquivo |
+|---|---|
+| alterado | `ARQUIVOS-ALTERADOS.md` |
+| alterado | `docs/index.html` |
+
+2 arquivos.
