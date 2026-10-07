@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Modulo compartilhado ja em .NET Standard: consumido pelo console .NET Framework (Importador) e pelo robo .NET 8 -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <RootNamespace>LegacyShop.Comum</RootNamespace>
+    <LangVersion>7.3</LangVersion>
+  </PropertyGroup>
+</Project>

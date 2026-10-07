@@ -78,6 +78,10 @@ public static class ReportWriter
     /// <summary>Target moniker shown next to each project ("net10.0" or "v4.8.1").</summary>
     public static string TargetMoniker(SolutionResult result) => result.Options.Target.Moniker();
 
+    /// <summary>Per project: a project already on .NET keeps its framework on lift-and-shift ("net8.0 (mantido)"); everything else gets the run's target.</summary>
+    public static string TargetMoniker(SolutionResult result, ProjectResult project) =>
+        result.Options.KeepsFramework && project.Project.IsAlreadyModern ? $"{project.Project.TargetFramework} (mantido)" : result.Options.Target.Moniker();
+
     /// <summary>Which parameter files carry a parameter, short: "todos" when every template has it, otherwise the stack suffixes ("data, worker").</summary>
     internal static string FilesLabel(DeploymentGuide guide, InfraParameter parameter)
     {

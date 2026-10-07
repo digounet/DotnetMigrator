@@ -1,6 +1,8 @@
 <Solution>
+  <Project Path="LegacyShop.Comum/LegacyShop.Comum.csproj" />
   <Project Path="LegacyShop.Core/LegacyShop.Core.csproj" />
   <Project Path="LegacyShop.Importador/LegacyShop.Importador.csproj" />
+  <Project Path="LegacyShop.Robo/LegacyShop.Robo.csproj" />
   <Project Path="LegacyShop.Tests/LegacyShop.Tests.csproj" />
   <Project Path="LegacyShop.Web/LegacyShop.Web.csproj" />
   <Project Path="LegacyShop.Worker/LegacyShop.Worker.csproj" />

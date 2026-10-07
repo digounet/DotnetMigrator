@@ -200,3 +200,93 @@ resource "aws_scheduler_schedule" "legacyshop_worker" {
     }
   }
 }
+
+# ---------------------------------------------------------------- LegacyShop.Robo (ECS Fargate (tarefa agendada via EventBridge Scheduler))
+resource "aws_ecr_repository" "legacyshop_robo" {
+  name                 = "legacyshop/legacyshop-robo"
+  image_tag_mutability = "MUTABLE"
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+}
+
+resource "aws_cloudwatch_log_group" "legacyshop_robo" {
+  name              = "/ecs/${local.name}/legacyshop-robo"
+  retention_in_days = 30
+}
+
+data "aws_secretsmanager_secret" "legacyshop_robo_connectionstrings__dbsh281" {
+  name = "legacyshop/legacyshop.robo/ConnectionStrings/DBSH281" # crie antes com _secrets/LegacyShop.Robo/create-secrets.sh
+}
+
+data "aws_secretsmanager_secret" "legacyshop_robo_tokenrobo" {
+  name = "legacyshop/legacyshop.robo/TokenRobo" # crie antes com _secrets/LegacyShop.Robo/create-secrets.sh
+}
+
+data "aws_secretsmanager_secret" "legacyshop_robo_accountpw" {
+  name = "legacyshop/legacyshop.robo/AccountPw" # crie antes com _secrets/LegacyShop.Robo/create-secrets.sh
+}
+
+data "aws_secretsmanager_secret" "legacyshop_robo_appsettings__credenciais__tokennotificacao" {
+  name = "legacyshop/legacyshop.robo/AppSettings/Credenciais/TokenNotificacao" # crie antes com _secrets/LegacyShop.Robo/create-secrets.sh
+}
+
+resource "aws_ecs_task_definition" "legacyshop_robo" {
+  family                   = "${local.name}-legacyshop-robo"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "512"
+  memory                   = "1024"
+  execution_role_arn       = aws_iam_role.execution.arn
+  task_role_arn            = aws_iam_role.task.arn
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "X86_64"
+  }
+  container_definitions = jsonencode([{
+    name      = "legacyshop-robo"
+    image     = "${aws_ecr_repository.legacyshop_robo.repository_url}:${var.image_tag}"
+    essential = true
+    environment = concat([
+      { name = "DOTNET_ENVIRONMENT", value = "Production" },
+      { name = "AWS_REGION", value = var.aws_region }
+    ], [for k, v in var.app_settings : { name = k, value = v }])
+    secrets = [
+      { name = "ConnectionStrings__DBSH281", valueFrom = data.aws_secretsmanager_secret.legacyshop_robo_connectionstrings__dbsh281.arn },
+      { name = "TokenRobo", valueFrom = data.aws_secretsmanager_secret.legacyshop_robo_tokenrobo.arn },
+      { name = "AccountPw", valueFrom = data.aws_secretsmanager_secret.legacyshop_robo_accountpw.arn },
+      { name = "AppSettings__Credenciais__TokenNotificacao", valueFrom = data.aws_secretsmanager_secret.legacyshop_robo_appsettings__credenciais__tokennotificacao.arn }
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = aws_cloudwatch_log_group.legacyshop_robo.name
+        awslogs-region        = var.aws_region
+        awslogs-stream-prefix = "ecs"
+      }
+    }
+  }])
+}
+
+resource "aws_scheduler_schedule" "legacyshop_robo" {
+  name                = "${local.name}-legacyshop-robo"
+  schedule_expression = var.schedules["legacyshop_robo"]
+  flexible_time_window {
+    mode = "OFF"
+  }
+  target {
+    arn      = aws_ecs_cluster.main.arn
+    role_arn = aws_iam_role.scheduler.arn
+    ecs_parameters {
+      task_definition_arn = aws_ecs_task_definition.legacyshop_robo.arn
+      launch_type         = "FARGATE"
+      network_configuration {
+        subnets         = module.vpc.private_subnets
+        security_groups = [aws_security_group.tasks.id]
+      }
+    }
+    retry_policy {
+      maximum_retry_attempts = 2
+    }
+  }
+}

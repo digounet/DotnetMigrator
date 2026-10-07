@@ -26,7 +26,7 @@ public static partial class ProjectMigrator
     }
 
     /// <summary>Inventory items and the settings list (secrets get their Secrets Manager name here).</summary>
-    private static void ReportExternalized(ProjectInfo project, LiteralExternalizer.Session session, ProjectResult result, ProjectMigrationContext ctx)
+    private static void ReportExternalized(ProjectInfo project, LiteralExternalizer.Session session, ProjectResult result, ProjectMigrationContext ctx, bool modern = false)
     {
         var items = result.Inventory;
         var rewritten = session.Literals.Where(l => l.Rewritten).ToList();
@@ -44,9 +44,10 @@ public static partial class ProjectMigrator
         if (config.Count > 0)
             items.Add(Item(project, InventorySeverity.Info, InventoryCategory.Code, "CS-CONFIG-EXTERNALIZED",
                 $"{config.Count} valor(es) fixos no código viraram configuração: {string.Join(", ", config.Select(l => l.Key).Distinct().Take(8))}",
-                $"URLs e e-mails fixos em literais ({string.Join(", ", config.Select(l => $"{l.File}:{l.Line}").Take(6))}) foram trocados por leitura de configuração; a chave e o valor atual estão no {(ctx.Target == MigrationTarget.NetFramework ? "app/web.config" : "appsettings.json")} e viram parâmetros da infraestrutura (um valor por ambiente). Campos const passaram a static readonly.",
-                ctx.Target == MigrationTarget.NetFramework
-                    ? "Confira os valores por ambiente em infra/cloudformation/parameters/*.json; a instância recebe os valores pelo Parameter Store."
+                $"URLs e e-mails fixos em literais ({string.Join(", ", config.Select(l => $"{l.File}:{l.Line}").Take(6))}) foram trocados por leitura de configuração; a chave e o valor atual estão no {(modern || ctx.Target != MigrationTarget.NetFramework ? "appsettings.json" : "app/web.config")} e viram parâmetros da infraestrutura (um valor por ambiente). Campos const passaram a static readonly.",
+                modern ? "As leituras usam MigratorSettings.Get (appsettings + variáveis de ambiente); os valores por ambiente ficam nos parâmetros da infraestrutura."
+                : ctx.Target == MigrationTarget.NetFramework
+                    ? "Confira os valores por ambiente em infra/<env>/parameters*.json; a instância recebe os valores pelo Parameter Store."
                     : "Onde a classe não recebe IConfiguration (classes estáticas, helpers), o build de verificação aponta o ponto: injete IConfiguration ou leia no startup. Os valores por ambiente ficam nos parâmetros da infraestrutura.",
                 config.Count == 1 ? config[0].File : null, auto: true));
         var secrets = rewritten.Where(l => l.Kind == SettingKind.Secret).ToList();

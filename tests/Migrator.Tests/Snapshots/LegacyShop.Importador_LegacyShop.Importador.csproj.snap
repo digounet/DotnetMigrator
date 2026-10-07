@@ -30,6 +30,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\LegacyShop.Core\LegacyShop.Core.csproj" />
+    <ProjectReference Include="..\LegacyShop.Comum\LegacyShop.Comum.csproj" />
   </ItemGroup>
 
 </Project>

@@ -218,7 +218,7 @@ public static partial class SecretsExtractor
 
     private static string Slug(string name) => Regex.Replace(name.ToLowerInvariant(), @"[^a-z0-9._-]+", "-").Trim('-');
 
-    [GeneratedRegex(@"password|pwd|secret|apikey|api_key|api-key|clientsecret|accesskey|access_key|token|senha|chave|credential", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"password|pwd|secret|apikey|api_key|api-key|clientsecret|accesskey|access_key|token|senha|chave|(?-i:Pw)(?=[A-Z_\d]|$)|_pw$|credential", RegexOptions.IgnoreCase)]
     private static partial Regex SecretKey();
 
     [GeneratedRegex(@"(password|pwd)\s*=\s*[^;]{1,}", RegexOptions.IgnoreCase)]

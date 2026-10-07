@@ -33,14 +33,16 @@ public static partial class ProjectMigrator
         // Fixed URLs/e-mails/credentials in C# literals → ConfigurationManager.AppSettings[...] (valid on .NET Framework); keys go to the config below.
         var session = new LiteralExternalizer.Session();
         var rewrittenSources = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        if (!project.IsVisualBasic)
+        // Projects already on .NET (Core/5+/netstandard) inside a mixed solution: appsettings.json instead of app.config, MigratorSettings instead of ConfigurationManager.
+        var modernNeedsPackages = project.IsAlreadyModern && ApplyModernConfiguration(project, ctx, result, plan, profile);
+        if (!project.IsVisualBasic && !project.IsAlreadyModern)
             foreach (var file in project.SourceFiles.Where(f => File.Exists(f.FullPath) && f.IsInside(project.ProjectDir)))
             {
                 var (text, _) = TextFiles.Read(file.FullPath);
                 var externalized = LiteralExternalizer.Externalize(text, Path.GetRelativePath(project.ProjectDir, file.FullPath).Replace('\\', '/'), session);
                 if (externalized != text) rewrittenSources[file.FullPath] = externalized;
             }
-        ReportExternalized(project, session, result, ctx);
+        if (!project.IsAlreadyModern) ReportExternalized(project, session, result, ctx);
         var codeSecrets = new SecretsPlan();
         var configAdditions = new List<(string Key, string Value)>();
         foreach (var literal in session.Literals.Where(l => l.Rewritten).DistinctBy(l => l.Key))
@@ -93,6 +95,7 @@ public static partial class ProjectMigrator
         var (projectText, _) = TextFiles.Read(project.ProjectPath);
         var (upgraded, before) = FrameworkProjectRewriter.Rewrite(projectText, project.IsSdkStyle);
         if (rewrittenSources.Count > 0) upgraded = EnsureSystemConfigurationReference(upgraded, project.IsSdkStyle);
+        if (modernNeedsPackages) upgraded = EnsureConfigurationPackages(upgraded);
         plan.Write(result.OutputProjectPath, upgraded);
         if (project.IsAlreadyModern)
             items.Add(Item(project, InventorySeverity.Warning, InventoryCategory.ProjectFile, "PRJ-FX-MODERN",
@@ -128,7 +131,7 @@ public static partial class ProjectMigrator
         }
 
         ReportBinaryCompatibility(project, inspections, items);
-        if (profile.HasAny(Signal.SecretsInConfig, Signal.SecretsInCode))
+        if (!project.IsAlreadyModern && profile.HasAny(Signal.SecretsInConfig, Signal.SecretsInCode))
             items.Add(Item(project, InventorySeverity.Warning, InventoryCategory.Configuration, "CFG-FX-SECRETS",
                 "Credenciais permanecem no web.config/app.config",
                 "No destino .NET Framework o arquivo de configuração não é convertido, então as senhas continuam no arquivo copiado.",

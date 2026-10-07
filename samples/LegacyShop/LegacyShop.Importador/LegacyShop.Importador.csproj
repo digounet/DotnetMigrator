@@ -47,6 +47,10 @@
       <Project>{7B2A5F3C-2D4E-5F6A-9B0C-1D2E3F4A5B6C}</Project>
       <Name>LegacyShop.Core</Name>
     </ProjectReference>
+    <ProjectReference Include="..\LegacyShop.Comum\LegacyShop.Comum.csproj">
+      <Project>{B2C3D4E5-0002-4B6C-9D0E-1F2A3B4C5D6E}</Project>
+      <Name>LegacyShop.Comum</Name>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

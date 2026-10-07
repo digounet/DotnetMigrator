@@ -30,7 +30,7 @@ public sealed class SampleSolutionTests : IDisposable
         var result = await new MigrationEngine().RunAsync(new MigrationOptions { Target = MigrationTarget.Net10, InputPath = SampleSolution(), DryRun = true, Offline = true, ReportDir = reportDir, Serverless = true
         });
 
-        Assert.Equal(["LegacyShop.Web", "LegacyShop.Core", "LegacyShop.Worker", "LegacyShop.Tests", "LegacyShop.Importador", "LegacyShop.Relatorios"], result.Projects.Select(p => p.Project.Name));
+        Assert.Equal(["LegacyShop.Web", "LegacyShop.Core", "LegacyShop.Worker", "LegacyShop.Tests", "LegacyShop.Importador", "LegacyShop.Relatorios", "LegacyShop.Comum", "LegacyShop.Robo"], result.Projects.Select(p => p.Project.Name));
         Assert.DoesNotContain(result.GlobalItems, i => i.RuleId == "SLN-SKIPPED" && i.Title.Contains(".vbproj")); // VB projects are loaded and profiled now
         Assert.Null(result.OutputDir);
 
@@ -66,7 +66,7 @@ public sealed class SampleSolutionTests : IDisposable
         var vendas = Assert.Single(result.Projects[5].DataAccess);                       // VB: SELECT * + reader columns, connection "Relatorios"
         Assert.Equal(("Vendas", "Relatorios"), (vendas.Name, vendas.Database));
         Assert.Equal(["*", "Mes", "Produto", "Valor"], vendas.Columns);
-        Assert.Contains("3 tabela(s) acessadas", result.Architecture!.Components.Single(c => c.Id == "rds-sqlserver").Role);
+        Assert.Contains("4 tabela(s) acessadas", result.Architecture!.Components.Single(c => c.Id == "rds-sqlserver").Role);
 
         // Modernization advice and AWS architecture
         Assert.Contains(web.Modernizations, m => m.RuleId == "MOD-PKG-AUTOMAPPER" && m.Kind == ModernizationKind.License);
@@ -118,6 +118,35 @@ public sealed class SampleSolutionTests : IDisposable
         Assert.Equal(InventorySeverity.Info, impressao.Severity);
         Assert.Contains("P/Invoke em winspool.drv", impressao.Title);
         Assert.Contains("BinaryFormatter", impressao.Description);
+        // Mixed solution: a netstandard module shared with the framework console and a .NET 8 robot with appsettings.json.
+        var comum = result.Projects[6];
+        Assert.True(comum.Project.IsAlreadyModern);
+        Assert.Contains(comum.Inventory, i => i.RuleId == "CS-CONFIG-EXTERNALIZED");
+        Assert.Contains(comum.Inventory, i => i.RuleId == "CFG-MODERN-LIBRARY");
+        Assert.Contains(comum.Settings, s => s.Key == "AppSettings:Urls:ServicoUrl" && s.Kind == SettingKind.Url && s.Source == SettingSource.Code);
+        var robo = result.Projects[7];
+        Assert.True(robo.Project.IsAlreadyModern);
+        Assert.Equal(AwsHosting.EcsScheduledTask, robo.Hosting!.Primary);
+        Assert.Contains(robo.Inventory, i => i.RuleId == "CFG-APPSETTINGS" && i.Title.Contains("1 connection string(s)"));
+        Assert.Contains(robo.Inventory, i => i.RuleId == "CS-CONFIG-HELPER");
+        Assert.Contains(robo.Inventory, i => i.RuleId == "CS-SECRET-EXTERNALIZED");
+        Assert.Contains(robo.Inventory, i => i.RuleId == "CFG-SECRETS-EXTRACTED");
+        Assert.DoesNotContain(robo.Inventory, i => i.RuleId == "CFG-FX-SECRETS");
+        var roboSecrets = robo.Secrets!.Secrets.Select(x => x.ConfigPath).ToList();
+        Assert.Contains("ConnectionStrings:DBSH281", roboSecrets);
+        Assert.Contains("TokenRobo", roboSecrets);
+        Assert.Contains("AccountPw", roboSecrets);
+        Assert.Contains("AppSettings:Credenciais:TokenNotificacao", roboSecrets);
+        Assert.DoesNotContain("Account", roboSecrets);
+        Assert.Contains(robo.Settings, s => s.Key == "UrlCentralApi" && s.EnvironmentVariable == "UrlCentralApi" && s.EnvironmentValues["Production"] == "https://central.exemplo.com.br/api");
+        Assert.Contains(robo.Settings, s => s.Key == "Caixa_Email" && s.Kind == SettingKind.Email);
+        Assert.Contains(result.Databases, d => d.Name == "DBSH281" && d.Database == "Protocolos" && d.Server == "SQNPRC009" && d.Project == "LegacyShop.Robo");
+        var protocolo = Assert.Single(robo.DataAccess);                                   // $"INSERT INTO {TABLE_NAME}" with the const resolved
+        Assert.Equal(("Protocolo", "Protocolos"), (protocolo.Name, protocolo.Database));
+        Assert.Contains("INSERT", protocolo.Operations);
+        Assert.Contains("Arquivo", protocolo.Columns);
+        Assert.Contains(robo.Hosting.Prerequisites.Concat(robo.Modernizations.Select(m => m.Title)), t => t.Contains("S3") || t.Contains("FSx") || t.Contains("pasta"));
+
         var barcode = Assert.Single(web.Inventory, i => i.RuleId == "PRJ-DLL");
         Assert.Equal(InventorySeverity.Breaking, barcode.Severity);                                  // references System.Web: cannot load on .NET 10
         Assert.Contains("System.Web", barcode.Description);

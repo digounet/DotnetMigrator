@@ -92,7 +92,6 @@ public static partial class ProjectMigrator
         {
             // Already SDK-style, but possibly on netcoreapp/net6/net8 or multi-targeting net48: bring it to net10.0 and align the Microsoft.* packages.
             var (csproj, tfmBefore, tfmAfter, updatedPackages, packageItems) = await ModernProjectUpdater.UpdateAsync(project, ctx.Planner);
-            plan.Write(result.OutputProjectPath, csproj);
             foreach (var file in ProjectLoader.EnumerateProjectDirectory(project.ProjectDir))
                 if (!file.Equals(project.ProjectPath, StringComparison.OrdinalIgnoreCase))
                     plan.Copy(file, Path.Combine(result.RelativeDir, Path.GetRelativePath(project.ProjectDir, file)));
@@ -104,6 +103,10 @@ public static partial class ProjectMigrator
                 "Compile e rode os testes: APIs removidas entre a versão de origem e o .NET 10 aparecem no build de verificação.", auto: true));
             var modernCode = project.SourceFiles.Where(f => File.Exists(f.FullPath)).Select(f => (Path.GetRelativePath(project.ProjectDir, f.FullPath).Replace('\\', '/'), TextFiles.Read(f.FullPath).Text)).ToList();
             var modernProfile = ApplicationProfiler.Analyze(project, modernCode, LoadConfig(project));
+            InspectBinaries(project, modernProfile);
+            // appsettings*.json and fixed literals: same treatment the legacy projects get (databases, secrets, parameters per environment).
+            var needsConfigurationPackages = ApplyModernConfiguration(project, ctx, result, plan, modernProfile);
+            plan.Write(result.OutputProjectPath, needsConfigurationPackages ? EnsureConfigurationPackages(csproj) : csproj);
             result.Modernizations.AddRange(ModernizationAdvisor.Analyze(project, modernProfile, modernCode, ctx.Cloud));
             result.DataScan = DataAccessAnalyzer.Scan(project, modernCode.Concat(DataFiles(project)));
             return new MigratedProject(result, null, plan, modernProfile);

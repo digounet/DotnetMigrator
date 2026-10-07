@@ -17,7 +17,7 @@ Há dois destinos:
 
 Nos dois casos a ferramenta entrega o **inventário** (o que ainda exige ação manual, com sugestão), os **dados acessados** (banco, tecnologia, tabelas e campos), as **sugestões de modernização** (bibliotecas pagas ou descontinuadas, código que muda de comportamento) e a **arquitetura alvo na AWS** (diagrama, serviços, fases, riscos, custo). Foi pensada para programas de migração em lote: dezenas de aplicações, mesma esteira, mesma arquitetura de referência.
 
-Tipos de projeto: ASP.NET MVC 5, Web API 2, Web Forms (só no destino framework; no .NET 10 vai para `_Legacy/`), console, Windows Service, bibliotecas, testes (MSTest/NUnit/xUnit), WinForms/WPF (só o `.csproj`) e VB.NET (copiado no destino framework; só inventariado no .NET 10).
+Tipos de projeto: ASP.NET MVC 5, Web API 2, Web Forms (só no destino framework; no .NET 10 vai para `_Legacy/`), console, Windows Service, bibliotecas, testes (MSTest/NUnit/xUnit), WinForms/WPF (só o `.csproj`), VB.NET (copiado no destino framework; só inventariado no .NET 10) e **soluções mistas**: projetos já em .NET 6/8/netstandard convivendo com projetos .NET Framework (um console framework que usa módulos netstandard, um robô .NET 8 ao lado de um site MVC 5). Projetos já modernos têm o `appsettings*.json` e o código analisados como os legados (bancos, segredos, URLs por ambiente) e, no .NET 10, o `.csproj` atualizado; no lift-and-shift ficam no framework em que estão e o EC2 recebe o runtime.
 
 - [1. Início rápido](#1-início-rápido)
 - [2. O que sai de uma migração](#2-o-que-sai-de-uma-migração)
@@ -102,6 +102,7 @@ Contas, sigla, e-mails e os valores dos segredos ficam como placeholders (`PREEN
 `migrator migrate App.sln` serve para o caso em que a decisão é sair do datacenter **sem reescrever**.
 
 - **Código intocado.** Cada projeto (C# ou VB.NET, formato antigo ou SDK) é copiado como está; só o `TargetFrameworkVersion` sobe para `v4.8.1` (`net481` em SDK-style) e os marcadores de runtime dos configs (`supportedRuntime`, `httpRuntime`, `compilation targetFramework`) acompanham. `packages.config`, `Global.asax`, Web Forms e `ServiceBase` permanecem; o `.sln` original é copiado para `app/src`.
+- **Projetos já em .NET 6/8/netstandard** (solução mista) ficam no framework em que estão (`PRJ-FX-MODERN`, "net8.0 (mantido)" no relatório): o `appsettings*.json` passa pela mesma análise dos configs XML (connection strings viram bancos e segredos, chaves com nome de credencial viram segredos, URLs/e-mails viram parâmetros com o valor de cada `appsettings.<Ambiente>.json`, pastas UNC entram na hospedagem), os literais do código viram `MigratorSettings.Get(...)` ([seção 5](#5-urls-e-mails-e-credenciais-viram-configuração)) e o user data da instância EC2 instala o runtime .NET (ou o Hosting Bundle, para web); o workflow publica esses projetos com `dotnet publish`.
 - **Proteção mínima.** URLs, e-mails e credenciais fixos no código e nos configs saem para configuração e Secrets Manager ([seção 5](#5-urls-e-mails-e-credenciais-viram-configuração)). Nada mais muda.
 - **Análise completa.** Perfil, dados acessados, modernização (sem os itens `MOD-CS-*`/`MOD-WIN-*`, que só valem para .NET 10/Linux) e arquitetura rodam sobre o código original e sobre os metadados das DLLs locais (`PRJ-DLL` informativo: o que cada DLL impediria na modernização).
 - **Hospedagem EC2 Windows** para todo projeto publicável: IIS para web, serviço Windows, Agendador de Tarefas para consoles. O relatório traz os pré-requisitos do lift-and-shift (health check para o ALB, `machineKey`, sessão InProc, pastas de rede → FSx, Integrated Security → AD, EWS em desligamento) e, na coluna "Alternativas", a hospedagem que o projeto teria após migrar para .NET 10. Serviços: EC2 + Auto Scaling, ALB, RDS, FSx for Windows ou S3 via File Gateway, Managed AD, Secrets Manager, Systems Manager, CloudWatch agent, CodeDeploy, AWS Backup, VPN.
@@ -133,7 +134,7 @@ Itens do inventário: `PRJ-FX-UPGRADE`, `PRJ-FX-CURRENT`, `PRJ-FX-MODERN`, `CFG-
     em paralelo: perfil da aplicação, dados acessados, modernização, arquitetura AWS, infra
 ```
 
-**1. Leitura.** `.sln` (linhas `Project(...)`), `.slnx` (XML), um `.csproj` ou uma pasta (`*.csproj` recursivo, ignorando `bin`, `obj`, `packages`, `node_modules` e saídas anteriores). Do `.csproj` saem propriedades, itens com metadados, `Reference`/`ProjectReference`/`COMReference`, imports, targets, build events, `packages.config` e a porta do IIS Express. Tipo do projeto, na ordem: testes (MSTest/NUnit/xUnit ou GUID) → web (GUID ou `web.config` + Global.asax/MVC/Web API/`.aspx`) → desktop (WinForms/WPF) → Windows Service (`Exe` + `ServiceBase`) → console (`Exe`) → biblioteca. Projetos já SDK-style com `netstandard`/`netcoreapp`/`net5+` só têm o `.csproj` atualizado para `net10.0` (`PRJ-MODERN`). VB.NET, F#, `.sqlproj`, Web Sites: inventariados como não migrados (`PRJ-VB`, `SLN-SKIPPED`).
+**1. Leitura.** `.sln` (linhas `Project(...)`), `.slnx` (XML), um `.csproj` ou uma pasta (`*.csproj` recursivo, ignorando `bin`, `obj`, `packages`, `node_modules` e saídas anteriores). Do `.csproj` saem propriedades, itens com metadados, `Reference`/`ProjectReference`/`COMReference`, imports, targets, build events, `packages.config` e a porta do IIS Express. Tipo do projeto, na ordem: testes (MSTest/NUnit/xUnit ou GUID) → web (GUID ou `web.config` + Global.asax/MVC/Web API/`.aspx`) → desktop (WinForms/WPF) → Windows Service (`Exe` + `ServiceBase`) → console (`Exe`) → biblioteca. Projetos já SDK-style com `netstandard`/`netcoreapp`/`net5+` não passam pelas reescritas: o `.csproj` é atualizado para `net10.0` com os pacotes `Microsoft.*` alinhados (`PRJ-MODERN`) e o `appsettings*.json` e o código recebem a análise de configuração e segredos da [seção 5](#5-urls-e-mails-e-credenciais-viram-configuração) (`CFG-APPSETTINGS`, `CFG-SECRETS-EXTRACTED`, `CS-CONFIG-HELPER`). VB.NET, F#, `.sqlproj`, Web Sites: inventariados como não migrados (`PRJ-VB`, `SLN-SKIPPED`).
 
 **2. Classificação.** Só os itens do `.csproj` entram (arquivos esquecidos no disco quebrariam o build SDK-style; são listados no inventário).
 
@@ -226,7 +227,9 @@ Em qualquer destino, antes de qualquer outra reescrita, `Migration/LiteralExtern
 
 A chave vem do identificador (`ErpProtocoloUrl`) ou do host/parte local do e-mail; `const` vira `static readonly`; o `.csproj` ganha `System.Configuration` quando falta. Literais em atributos, `case`, valores padrão de parâmetro e strings interpoladas/verbatim não são reescritos e aparecem em `CS-CONFIG-SKIPPED`. Itens: `CS-CONFIG-EXTERNALIZED`, `CS-SECRET-EXTERNALIZED`.
 
-Os `appSettings` com URL/e-mail também viram parâmetros, com o valor por ambiente que os `Web.Debug.config`/`Web.Release.config` já declaravam. Credenciais em qualquer seção do config (appSettings, connection strings, SMTP, `<identity>`, `sessionState`, `machineKey`, seções customizadas) saem para `_secrets/<projeto>/` (`appsettings.Secrets.json`, template, `create-secrets.sh`, bloco da task definition, user-secrets); `--keep-secrets` desliga.
+Em projetos já em .NET (6/8/netstandard), onde não há `ConfigurationManager`, a leitura vira `MigratorSettings.Get("AppSettings:Urls:X")`: um `MigratorSettings.cs` gerado no projeto monta `IConfiguration` (appsettings.json + `appsettings.<Ambiente>.json` + variáveis de ambiente) uma vez, e os pacotes `Microsoft.Extensions.Configuration.Json/EnvironmentVariables` entram no `.csproj` quando nada já os traz (`CS-CONFIG-HELPER`). Em bibliotecas, as chaves precisam existir no appsettings do host (`CFG-MODERN-LIBRARY`); os parâmetros da infra já cobrem os executáveis que as referenciam.
+
+Os `appSettings` com URL/e-mail também viram parâmetros, com o valor por ambiente que os `Web.Debug.config`/`Web.Release.config` já declaravam. O `appsettings*.json` dos projetos modernos recebe o mesmo tratamento (`Migration/AppSettingsAnalyzer`): `ConnectionStrings` viram bancos na arquitetura e, com senha, segredos; chaves com nome de credencial (`Password`, `Pwd`, `Pw`, `Token`, `Secret`, `ApiKey`, `Senha`, `Chave`...) viram segredos com o marcador no arquivo; URLs e e-mails viram parâmetros com o valor de cada `appsettings.<Ambiente>.json`; pastas `\\servidor\...` entram na hospedagem (FSx/S3). Credenciais em qualquer seção do config (appSettings, connection strings, SMTP, `<identity>`, `sessionState`, `machineKey`, seções customizadas) saem para `_secrets/<projeto>/` (`appsettings.Secrets.json`, template, `create-secrets.sh`, bloco da task definition, user-secrets); `--keep-secrets` desliga.
 
 Na infra: o EC2 recebe os parâmetros pelo Parameter Store (`/<feature>/<env>/...`, gravado no config pelo `after-install.ps1` do CodeDeploy) e os segredos pelo Secrets Manager; ECS e Lambda recebem variáveis de ambiente `AppSettings__Secao__Chave` e `secrets` da task definition. **Segredos nunca passam por template ou arquivo de parâmetros**: `data.yml` cria os nomes com `SecretString: PREENCHER` e `_secrets/<projeto>/create-secrets.sh` coloca os valores.
 
@@ -239,7 +242,7 @@ Em qualquer modo o relatório traz a seção **"Dados acessados"**: para cada ba
 | Fonte (`Analysis/DataAccessAnalyzer`, análise estática) | O que extrai |
 |---|---|
 | SQL em literais C#/VB (inclusive concatenações, verbatim e interpoladas) e arquivos `.sql` | tabelas de `FROM`/`JOIN`/`INSERT`/`UPDATE`/`DELETE`/`MERGE`/`TRUNCATE`, procedures de `EXEC`; colunas do `SELECT`, `INSERT (...)`, `SET`, `WHERE`/`ON`/`ORDER BY`/`GROUP BY`; aliases resolvidos; CTEs, temporárias e `sys.*` ignorados; `Banco.dbo.Tabela` fixa o banco |
-| ADO.NET | `reader["Coluna"]`, `GetOrdinal`, `leitor("Coluna")` (VB) ligados ao comando mais próximo; `CommandType.StoredProcedure` + parâmetros |
+| ADO.NET | `reader["Coluna"]`, `GetOrdinal`, `leitor("Coluna")` (VB) ligados ao comando mais próximo; `CommandType.StoredProcedure` + parâmetros; em strings interpoladas, `{TABLE_NAME}` é resolvido quando há `const`/`static readonly string` com esse nome no projeto (`$"INSERT INTO {TABLE_NAME} ..."`) |
 | Dapper | `Query/Execute("sql")`, `commandType: StoredProcedure` |
 | EF6 / EF Core | `DbSet<T>` → tabela (`ToTable`/`[Table]` ou convenção); colunas = propriedades públicas da entidade, com `HasColumnName`/`[Column]`, sem `[NotMapped]`/navegações; `SaveChanges` marca escrita |
 | EDMX | `EntitySet`/`EntityType` do modelo de armazenamento e `Function` |
@@ -527,14 +530,14 @@ src/Migrator.Core
                 LlmCodeFixer, LlmCodeDrafter, LlmTriage, LlmNarrator, LlmPrompts
   Data/         PackageRules, FrameworkReferenceRules, CodeRules, BuildHints, ModernizationRules, CodeModernizationRules
   Migration/    MigrationEngine (orquestração, layout da saída), ProjectMigrator (+ .Framework, .Settings), LiteralExternalizer,
-                ConfigSettingsCollector, SecretsExtractor, ControllerRewriter, WorkerServiceRewriter, ConfigurationInjector,
+                ConfigSettingsCollector, AppSettingsAnalyzer (appsettings*.json dos projetos modernos), SecretsExtractor, ControllerRewriter, WorkerServiceRewriter, ConfigurationInjector,
                 CodeTransformer, RazorTransformer, ConfigMigrator, PackagePlanner, PackageAligner, ProjectFileWriter,
                 ProgramGenerator, BuildVerifier, RuntimeVerifier
   NuGet/        NuGetClient, NuGetConfigFile
   Reporting/    HtmlReport, MarkdownReport, ExcelReport, CsvReport, JsonReport (+ .Cloud, .Data, .Deployment)
   Portfolio/    PortfolioRunner, PortfolioAggregator, PortfolioReports
 src/Migrator.Cli      analyze / migrate / portfolio (System.CommandLine + Spectre.Console)
-tests/Migrator.Tests  165 testes unitários, de ponta a ponta sobre samples/LegacyShop e snapshots
+tests/Migrator.Tests  168 testes unitários, de ponta a ponta sobre samples/LegacyShop e snapshots
 samples/LegacyShop    solução legada de exemplo
 docs/                 GitHub Pages (index.html, demo/, diagrams/)
 ```

@@ -32,7 +32,12 @@ public static partial class LiteralExternalizer
         public List<ExternalizedLiteral> Literals { get; } = [];
     }
 
-    public static string Externalize(string text, string file, Session session)
+    /// <summary>How the rewritten code reads the value: ConfigurationManager (legacy pipeline / .NET Framework) or the generated MigratorSettings helper (projects already on .NET).</summary>
+    public enum ReadStyle { ConfigurationManager, MigratorSettings }
+
+    public static string Externalize(string text, string file, Session session) => Externalize(text, file, session, ReadStyle.ConfigurationManager);
+
+    public static string Externalize(string text, string file, Session session, ReadStyle style)
     {
         var sb = new StringBuilder(text.Length + 256);
         var last = 0;
@@ -54,7 +59,7 @@ public static partial class LiteralExternalizer
             var segment = text[segmentStart..literal.Start];
             if (literal.IsConst) segment = ConstKeyword().Replace(segment, "static readonly ", 1);
             sb.Append(text, last, segmentStart - last).Append(segment);
-            sb.Append($"System.Configuration.ConfigurationManager.AppSettings[\"{key}\"]");
+            sb.Append(style == ReadStyle.MigratorSettings ? $"MigratorSettings.Get(\"{ConfigPath(key)}\")" : $"System.Configuration.ConfigurationManager.AppSettings[\"{key}\"]");
             last = literal.End;
         }
         sb.Append(text, last, text.Length - last);

@@ -98,10 +98,27 @@ public sealed class FrameworkTargetTests : IDisposable
         Assert.Contains(relatorios.Inventory, i => i.RuleId == "PRJ-DLL" && i.Severity == InventorySeverity.Info && i.Title.Contains("Legacy.Impressao") && i.Description.Contains("Nada muda no destino .NET Framework"));
         Assert.Contains(relatorios.Hosting!.Rationale, r => r.Contains("Registro do Windows (DLL Legacy.Impressao)"));
 
+        // Projects already on .NET inside the mixed solution: copied as they are, but appsettings/code get the same protection, and the EC2 gets the runtime.
+        var robo = result.Projects.Single(p => p.Project.Name == "LegacyShop.Robo");
+        Assert.Contains(robo.Inventory, i => i.RuleId == "PRJ-FX-MODERN");
+        Assert.DoesNotContain(robo.Inventory, i => i.RuleId == "CFG-FX-SECRETS");
+        Assert.Contains(robo.Inventory, i => i.RuleId == "CFG-APPSETTINGS");
+        Assert.Contains("<secret: legacyshop/legacyshop.robo/ConnectionStrings/DBSH281>", Read("LegacyShop.Robo/appsettings.json"));
+        Assert.Contains("https://central.exemplo.com.br/api", Read("LegacyShop.Robo/appsettings.Production.json"));
+        Assert.True(Exists("LegacyShop.Robo/MigratorSettings.cs"));
+        Assert.Contains("MigratorSettings.Get(\"AppSettings:Credenciais:TokenNotificacao\")", Read("LegacyShop.Robo/Data/ProtocoloRepository.cs"));
+        Assert.True(Exists("_secrets/LegacyShop.Robo/create-secrets.sh"));
+        Assert.Contains("Microsoft.Extensions.Configuration.Json", Read("LegacyShop.Comum/LegacyShop.Comum.csproj"));
+        Assert.Contains("MigratorSettings.Get(\"AppSettings:Urls:ServicoUrl\")", Read("LegacyShop.Comum/Protocolo.cs"));
+        Assert.Contains("dotnet-install.ps1 -Runtime dotnet -Channel 8.0", Read("infra/service-robo.yml"));
+        Assert.Contains("kind: dotnet", Read(".github/workflows/deploy.yml"));
+        Assert.Contains("dotnet publish", Read(".github/workflows/deploy.yml"));
+        Assert.Contains(result.Deployment!.Settings, s => s.Key == "UrlExchangeWebService" && s.ParameterStorePath == "/legacyshop/<env>/UrlExchangeWebService");
+
         // Deployment guide: the same names as the generated files, in the report, the repository README and the JSON.
         var guide = result.Deployment!;
         Assert.True(guide.InfrastructureWritten);
-        Assert.Equal(["web", "worker", "importador", "relatorios"], guide.Units.Select(u => u.Micro));
+        Assert.Equal(["web", "worker", "importador", "relatorios", "robo"], guide.Units.Select(u => u.Micro));
         Assert.Equal("service-worker.yml", guide.Units.Single(u => u.Project == "LegacyShop.Worker").TemplateFile);
         Assert.Contains(guide.Parameters, p => p.Name == "VPCID" && p.Placeholder && p.Files.Contains("parameters-data.json") && p.Values["prod"] == "vpc-xxxxxxxxxxxxxxxxx");
         Assert.Contains(guide.Parameters, p => p.Name == "MicroServiceName" && p.Values["dev"] == "(varia por arquivo)");
@@ -260,7 +277,7 @@ public sealed class FrameworkTargetTests : IDisposable
         // Deployment guide (net10 + CloudFormation + serverless): ECS services, the Lambda, secrets as task-definition variables.
         var guide = result.Deployment!;
         Assert.True(guide.InfrastructureWritten);
-        Assert.Equal(["web", "worker", "importador", "relatorios"], guide.Units.Select(u => u.Micro));
+        Assert.Equal(["web", "worker", "importador", "robo", "relatorios"], guide.Units.Select(u => u.Micro));
         Assert.Equal("lambda-importador.yml", guide.Units.Single(u => u.Project == "LegacyShop.Importador").TemplateFile);
         Assert.NotNull(guide.Units.Single(u => u.Project == "LegacyShop.Relatorios").NotGenerated);
         Assert.Contains(guide.Parameters, p => p.Name == "EcsClusterName" && p.Values["dev"] == "ecs-cluster-legacyshop-fargate");

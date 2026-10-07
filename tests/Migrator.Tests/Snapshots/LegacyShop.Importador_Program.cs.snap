@@ -29,7 +29,7 @@ namespace LegacyShop.Importador
                     configuration["AppSettings:CaixaPostal"],
                     configuration["AppSettings:CaixaPostalSenha"]);
 
-                Console.WriteLine("{0:dd/MM/yyyy HH:mm} - {1} arquivo(s) e {2} e-mail(s) importados.", DateTime.Now, arquivos, emails);
+                Console.WriteLine("{0:dd/MM/yyyy HH:mm} - {1} arquivo(s) e {2} e-mail(s) importados (protocolo {3}).", DateTime.Now, arquivos, emails, LegacyShop.Comum.Protocolo.Gerar("IMP", DateTime.Now));
                 return 0;
             }
             catch (Exception ex)

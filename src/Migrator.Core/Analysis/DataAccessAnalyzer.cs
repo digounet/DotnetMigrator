@@ -25,6 +25,8 @@ public sealed class DataAccessScan
     public string? TechnologyHint { get; set; }
     /// <summary>Character offset of the statement that created each entry, so reader columns/parameters attach to the nearest one.</summary>
     internal Dictionary<TableAccess, int> Offsets { get; } = [];
+    /// <summary>const/static readonly string fields of the project, to resolve {NAME} holes in interpolated SQL.</summary>
+    internal Dictionary<string, string> Constants { get; } = new(StringComparer.Ordinal);
 }
 
 /// <summary>
@@ -62,6 +64,11 @@ public static partial class DataAccessAnalyzer
     {
         var scan = new DataAccessScan();
         var visualBasic = project.IsVisualBasic;
+        // Interpolated SQL often carries the table name as a constant ($"INSERT INTO {TABLE_NAME} ..."): resolve the ones declared anywhere in the project.
+        scan.Constants.Clear();
+        foreach (var (_, text) in code)
+            foreach (Match m in StringConstant().Matches(text ?? ""))
+                scan.Constants.TryAdd(m.Groups["name"].Value, m.Groups["value"].Value);
         foreach (var (path, text) in code)
         {
             if (string.IsNullOrEmpty(text)) continue;
@@ -85,7 +92,7 @@ public static partial class DataAccessAnalyzer
 
         // 1. SQL inside string literals (concatenated pieces of the same expression are joined).
         var isProcedureFile = text.Contains("CommandType.StoredProcedure", StringComparison.Ordinal) || text.Contains("CommandType.StoredProcedure", StringComparison.OrdinalIgnoreCase);
-        foreach (var literal in LogicalStrings(text, visualBasic))
+        foreach (var literal in LogicalStrings(text, visualBasic, scan.Constants))
         {
             if (LooksLikeSql(literal.Value))
                 ScanSql(scan, project, path, literal.Value, access, lines.LineOf(literal.Offset), connectionNames, literal.Offset);
@@ -432,7 +439,9 @@ public static partial class DataAccessAnalyzer
     internal sealed record LogicalString(string Value, int Offset);
 
     /// <summary>String literals of a C#/VB file; pieces joined by + / &amp; (with optional line continuation) become one string.</summary>
-    internal static List<LogicalString> LogicalStrings(string text, bool visualBasic)
+    internal static List<LogicalString> LogicalStrings(string text, bool visualBasic) => LogicalStrings(text, visualBasic, null);
+
+    internal static List<LogicalString> LogicalStrings(string text, bool visualBasic, IReadOnlyDictionary<string, string>? constants)
     {
         var result = new List<LogicalString>();
         var sb = new StringBuilder();
@@ -459,7 +468,7 @@ public static partial class DataAccessAnalyzer
                 var verbatim = c == '@' || text[i + 1] == '@';
                 var quote = text.IndexOf('"', i);
                 (literal, i) = ReadQuoted(text, quote + 1, doubledEscape: verbatim, backslashEscape: !verbatim);
-                literal = Interpolation().Replace(literal, "@p");
+                literal = Interpolation().Replace(literal, m => constants != null && constants.TryGetValue(m.Value.Trim('{', '}').Trim(), out var constant) ? constant : "@p");
             }
             else if (c == '"')
             {
@@ -709,6 +718,9 @@ public static partial class DataAccessAnalyzer
 
     [GeneratedRegex(@"\{[^{}]*\}")]
     private static partial Regex Interpolation();
+
+    [GeneratedRegex(@"\b(?:const|static\s+readonly)\s+string\s+(?<name>[A-Za-z_]\w*)\s*=\s*@?""(?<value>[^""\r\n]*)""")]
+    private static partial Regex StringConstant();
 
     [GeneratedRegex(@"^\s*(?:[+&]\s*(?:_\s*)?)\s*$|^\s*_?\s*[\r\n]+\s*[+&]\s*$|^\s*[+&]\s*[\r\n]+\s*$", RegexOptions.Singleline)]
     private static partial Regex Concatenation();

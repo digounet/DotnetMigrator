@@ -44,6 +44,10 @@ jobs:
             dockerfile: app/src/LegacyShop.Worker/Dockerfile
             service: legacyshop-worker
             kind: task
+          - name: legacyshop-robo
+            dockerfile: app/src/LegacyShop.Robo/Dockerfile
+            service: legacyshop-robo
+            kind: task
     steps:
       - uses: actions/checkout@v4
       - uses: aws-actions/configure-aws-credentials@v4

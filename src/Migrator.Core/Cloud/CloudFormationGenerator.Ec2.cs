@@ -461,6 +461,23 @@ public static partial class CloudFormationGenerator
         sb.AppendLine("  Invoke-WebRequest \"https://go.microsoft.com/fwlink/?LinkId=2203304\" -OutFile C:\\ndp481.exe");
         sb.AppendLine("  Start-Process C:\\ndp481.exe -ArgumentList \"/q /norestart\" -Wait");
         sb.AppendLine("}");
+        if (ModernMajor(d.Result.Project) is { } major)
+        {
+            // Projects already on .NET (Core/5+) in a lift-and-shift: the instance needs the runtime, not only the Framework.
+            sb.AppendLine($"# .NET {major} ({(isWeb ? "Hosting Bundle para o IIS" : "runtime")}) para o projeto já em .NET moderno");
+            if (isWeb)
+            {
+                sb.AppendLine($"Invoke-WebRequest \"https://aka.ms/dotnet/{major}.0/dotnet-hosting-win.exe\" -OutFile C:\\dotnet-hosting.exe");
+                sb.AppendLine("Start-Process C:\\dotnet-hosting.exe -ArgumentList \"/install /quiet /norestart\" -Wait");
+                sb.AppendLine("net stop was /y | Out-Null; net start w3svc | Out-Null");
+            }
+            else
+            {
+                sb.AppendLine("Invoke-WebRequest \"https://dot.net/v1/dotnet-install.ps1\" -OutFile C:\\dotnet-install.ps1");
+                sb.AppendLine($"& C:\\dotnet-install.ps1 -Runtime dotnet -Channel {major}.0 -InstallDir \"C:\\Program Files\\dotnet\"");
+                sb.AppendLine("[Environment]::SetEnvironmentVariable(\"PATH\", [Environment]::GetEnvironmentVariable(\"PATH\", \"Machine\") + \";C:\\Program Files\\dotnet\", \"Machine\")");
+            }
+        }
         sb.AppendLine("# Agente do CodeDeploy");
         sb.AppendLine("Invoke-WebRequest \"https://aws-codedeploy-${AWS::Region}.s3.${AWS::Region}.amazonaws.com/latest/codedeploy-agent.msi\" -OutFile C:\\codedeploy-agent.msi");
         sb.AppendLine("Start-Process msiexec.exe -ArgumentList \"/i C:\\codedeploy-agent.msi /quiet /l C:\\codedeploy-install.log\" -Wait");
@@ -481,6 +498,14 @@ public static partial class CloudFormationGenerator
         sb.AppendLine("</powershell>");
         sb.AppendLine("<persist>true</persist>");
         return sb.ToString().Replace("\r\n", "\n");
+    }
+
+    /// <summary>Major version of a project already on .NET (net6.0 → 6, net8.0-windows → 8); null for .NET Framework and netstandard.</summary>
+    internal static int? ModernMajor(ProjectInfo project)
+    {
+        if (!project.IsAlreadyModern) return null;
+        var m = System.Text.RegularExpressions.Regex.Match(project.TargetFramework, @"\bnet(?:coreapp)?(\d+)\.\d");
+        return m.Success && int.TryParse(m.Groups[1].Value, out var major) ? major : null;
     }
 
     // ------------------------------------------------------------------ CodeDeploy bundle (appspec + PowerShell hooks)
@@ -643,7 +668,7 @@ public static partial class CloudFormationGenerator
         {
             sb.AppendLine($"          - micro: {Micro(result, d)}");
             sb.AppendLine($"            project: {SourceDir}/{d.Result.OutputProjectPath!.Replace('\\', '/')}");
-            sb.AppendLine($"            kind: {(d.Result.Project.Kind == ProjectKind.Web ? "web" : "exe")}");
+            sb.AppendLine($"            kind: {(ModernMajor(d.Result.Project) != null ? "dotnet" : d.Result.Project.Kind == ProjectKind.Web ? "web" : "exe")}");
         }
         sb.AppendLine("    steps:");
         sb.AppendLine("      - uses: actions/checkout@v4");
@@ -656,6 +681,12 @@ public static partial class CloudFormationGenerator
         sb.AppendLine("      - name: Build (serviço/console)");
         sb.AppendLine("        if: matrix.kind == 'exe'");
         sb.AppendLine("        run: msbuild ${{ matrix.project }} /p:Configuration=Release /p:OutDir=${{ github.workspace }}\\bundle\\app\\");
+        if (deployables.Any(d => ModernMajor(d.Result.Project) != null))
+        {
+            sb.AppendLine("      - name: Publish (.NET moderno)");
+            sb.AppendLine("        if: matrix.kind == 'dotnet'");
+            sb.AppendLine("        run: dotnet publish ${{ matrix.project }} -c Release -r win-x64 --self-contained false -o ${{ github.workspace }}\\bundle\\app");
+        }
         sb.AppendLine("      - name: Montar pacote do CodeDeploy");
         sb.AppendLine("        run: Copy-Item -Path infra/codedeploy/${{ matrix.micro }}/* -Destination bundle -Recurse -Force");
         sb.AppendLine("      - uses: aws-actions/configure-aws-credentials@v4");

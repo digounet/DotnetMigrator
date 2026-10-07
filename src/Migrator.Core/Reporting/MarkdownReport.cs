@@ -62,7 +62,7 @@ public static partial class MarkdownReport
         {
             sb.AppendLine($"### {p.Project.Name}");
             sb.AppendLine();
-            sb.AppendLine($"{ReportWriter.KindLabel(p.Project)} · {p.Project.TargetFramework} → {ReportWriter.TargetMoniker(result)} · pasta `{(p.RelativeDir.Length == 0 ? "." : p.RelativeDir)}`");
+            sb.AppendLine($"{ReportWriter.KindLabel(p.Project)} · {p.Project.TargetFramework} → {ReportWriter.TargetMoniker(result, p)} · pasta `{(p.RelativeDir.Length == 0 ? "." : p.RelativeDir)}`");
             sb.AppendLine();
             RenderItems(sb, p.Inventory, "####");
         }

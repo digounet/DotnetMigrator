@@ -135,7 +135,7 @@ public sealed class PortfolioTests : IDisposable
         var app = Assert.Single(result.Apps);
         Assert.Equal("LegacyShop", app.Name);
         Assert.Null(app.Error);
-        Assert.Equal(6, app.Projects);
+        Assert.Equal(8, app.Projects);
         Assert.True(app.Breaking > 0);
         Assert.Equal(1, app.Hosting["ECS Fargate"]);
         Assert.Equal(1, app.Hosting["Lambda"]);
@@ -155,7 +155,7 @@ public sealed class PortfolioTests : IDisposable
 
         using var json = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(report, "apps", "LegacyShop", JsonReport.FileName)));
         Assert.Equal("analyze", json.RootElement.GetProperty("mode").GetString());
-        Assert.Equal(6, json.RootElement.GetProperty("projects").GetArrayLength());
+        Assert.Equal(8, json.RootElement.GetProperty("projects").GetArrayLength());
         Assert.Equal("lambda", json.RootElement.GetProperty("projects")[4].GetProperty("hosting").GetProperty("primary").GetString());
         Assert.True(json.RootElement.GetProperty("architecture").GetProperty("components").GetArrayLength() > 5);
     }

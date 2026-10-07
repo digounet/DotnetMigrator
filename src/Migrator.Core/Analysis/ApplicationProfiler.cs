@@ -508,7 +508,7 @@ public static partial class ApplicationProfiler
         return new DatabaseUse(provider, server, database, integrated, name, project);
     }
 
-    private static Signal DatabaseSignal(string provider) => provider switch
+    internal static Signal DatabaseSignal(string provider) => provider switch
     {
         "Oracle" => Signal.Oracle,
         "MySQL" => Signal.MySql,
@@ -558,7 +558,7 @@ public static partial class ApplicationProfiler
     [GeneratedRegex(@"^[A-Za-z]:\\")]
     private static partial Regex WindowsPath();
 
-    [GeneratedRegex(@"password|pwd|secret|apikey|api_key|api-key|clientsecret|accesskey|access_key|token|senha|chave", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"password|pwd|secret|apikey|api_key|api-key|clientsecret|accesskey|access_key|token|senha|chave|(?-i:Pw)(?=[A-Z_\d]|$)|_pw$", RegexOptions.IgnoreCase)]
     private static partial Regex Secret();
 
     [GeneratedRegex(@"(password|pwd)\s*=\s*[^;]{1,}", RegexOptions.IgnoreCase)]

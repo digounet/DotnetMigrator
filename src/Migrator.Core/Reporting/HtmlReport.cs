@@ -196,7 +196,7 @@ public static partial class HtmlReport
         foreach (var p in result.Projects)
         {
             sb.Append($"<details class=\"project\" id=\"p-{Anchor(p.Project.Name)}\" {(p.Breaking.Any() ? "open" : "")}><summary>{E(p.Project.Name)}")
-              .Append($"<span class=\"sub\">{E(ReportWriter.KindLabel(p.Project))} · {E(p.Project.TargetFramework)} → {E(ReportWriter.TargetMoniker(result))} · {E(p.RelativeDir.Length == 0 ? "." : p.RelativeDir)}</span>")
+              .Append($"<span class=\"sub\">{E(ReportWriter.KindLabel(p.Project))} · {E(p.Project.TargetFramework)} → {E(ReportWriter.TargetMoniker(result, p))} · {E(p.RelativeDir.Length == 0 ? "." : p.RelativeDir)}</span>")
               .Append($"<span class=\"badge breaking\">{p.Breaking.Count()} bloqueantes</span><span class=\"badge warning\">{p.Warnings.Count()} atenção</span><span class=\"badge auto\">{p.Automatic.Count()} automáticos</span></summary>");
             RenderItems(sb, p.Inventory);
             sb.Append("</details>");
