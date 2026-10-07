@@ -18,7 +18,7 @@ public static partial class HtmlReport
     private static void RenderArchitecture(StringBuilder sb, SolutionResult result)
     {
         var a = result.Architecture!;
-        sb.Append("<div class=\"panel\" id=\"aws\"><h2>Arquitetura alvo (AWS)</h2><div class=\"body\">");
+        sb.Append("<div class=\"panel\" id=\"aws\"><h2>3. Arquitetura alvo (AWS)</h2><div class=\"body\">");
         sb.Append($"<p class=\"lead\">{E(a.Summary)}</p>");
         if (a.ExecutiveSummary != null)
         {
@@ -74,7 +74,7 @@ public static partial class HtmlReport
 
     private static void RenderModernization(StringBuilder sb, SolutionResult result, List<ModernizationItem> items)
     {
-        sb.Append("<div class=\"panel\" id=\"modernizacao\"><h2>Modernização</h2>");
+        sb.Append("<div class=\"panel\" id=\"modernizacao\"><h2>5. Modernização</h2>");
         sb.Append("<div class=\"body\"><p class=\"lead\">Sugestões que não bloqueiam a compilação: bibliotecas que passaram a ser pagas ou foram descontinuadas, código C# que compila mas muda de comportamento no .NET 10/Linux, e adaptações para rodar bem na AWS. Ordenadas por impacto.</p>");
 
         var byKind = items.GroupBy(i => i.Kind).OrderBy(g => g.Key).Select(g => $"{g.Count()} {g.Key.Display()}");

@@ -15,6 +15,7 @@ public static partial class ExcelReport
         if (result.AllModernizations.Any()) WriteModernization(workbook.Worksheets.Add("Modernização"), result);
         if (result.AllDataAccess.Any()) WriteDataAccess(workbook.Worksheets.Add("Dados acessados"), result);
         if (result.Architecture != null) WriteArchitecture(workbook.Worksheets.Add("Arquitetura AWS"), result);
+        if (result.Deployment != null) WriteDeployment(workbook.Worksheets.Add("Implantação"), result.Deployment);
         workbook.SaveAs(path);
     }
 

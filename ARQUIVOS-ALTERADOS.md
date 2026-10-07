@@ -151,7 +151,7 @@ Lista dos arquivos criados, alterados ou excluidos em cada commit da evolucao pa
 
 4 arquivos.
 
-## Commit seguinte — feat: inspecao de DLLs locais por tipo, membro e P/Invoke
+## cefd6e3 (2026-10-07) — feat: inspecao de DLLs locais por tipo, membro e P/Invoke
 
 | Status | Arquivo |
 |---|---|
@@ -175,3 +175,34 @@ Lista dos arquivos criados, alterados ou excluidos em cada commit da evolucao pa
 | alterado | `tests/Migrator.Tests/SampleSolutionTests.cs` |
 
 18 arquivos.
+
+## Commit seguinte — feat: relatorio como guia de implantacao na AWS
+
+| Status | Arquivo |
+|---|---|
+| alterado | `ARQUIVOS-ALTERADOS.md` |
+| alterado | `CLAUDE.md` |
+| alterado | `README.md` |
+| alterado | `docs/demo/migration-report.html` |
+| alterado | `docs/demo/migration-report.md` |
+| alterado | `docs/index.html` |
+| criado | `src/Migrator.Core/Cloud/CloudFormationGenerator.Guide.cs` |
+| alterado | `src/Migrator.Core/Cloud/CloudFormationGenerator.cs` |
+| alterado | `src/Migrator.Core/Migration/MigrationEngine.cs` |
+| criado | `src/Migrator.Core/Models/DeploymentGuide.cs` |
+| alterado | `src/Migrator.Core/Models/MigrationResult.cs` |
+| criado | `src/Migrator.Core/Reporting/ExcelReport.Deployment.cs` |
+| alterado | `src/Migrator.Core/Reporting/ExcelReport.cs` |
+| alterado | `src/Migrator.Core/Reporting/HtmlReport.Cloud.cs` |
+| alterado | `src/Migrator.Core/Reporting/HtmlReport.Data.cs` |
+| criado | `src/Migrator.Core/Reporting/HtmlReport.Deployment.cs` |
+| alterado | `src/Migrator.Core/Reporting/HtmlReport.cs` |
+| alterado | `src/Migrator.Core/Reporting/JsonReport.cs` |
+| alterado | `src/Migrator.Core/Reporting/MarkdownReport.Cloud.cs` |
+| alterado | `src/Migrator.Core/Reporting/MarkdownReport.Data.cs` |
+| criado | `src/Migrator.Core/Reporting/MarkdownReport.Deployment.cs` |
+| alterado | `src/Migrator.Core/Reporting/MarkdownReport.cs` |
+| alterado | `tests/Migrator.Tests/FrameworkTargetTests.cs` |
+| alterado | `tests/Migrator.Tests/SampleSolutionTests.cs` |
+
+24 arquivos.

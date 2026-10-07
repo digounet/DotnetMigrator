@@ -93,7 +93,7 @@ A saída reproduz o repositório padrão da plataforma, nos dois destinos e com 
 └── _migration-report/          relatórios (seção 12)
 ```
 
-Contas, sigla, e-mails e os valores dos segredos ficam como placeholders (`PREENCHER`) para serem completados uma vez, no primeiro commit. `--no-infra` desliga `infra/`, `.iupipes.yml`, `tests/` e o workflow; `--output` muda a pasta.
+Contas, sigla, e-mails e os valores dos segredos ficam como placeholders (`PREENCHER`) para serem completados uma vez, no primeiro commit; o `README.md` da saída traz o **guia de implantação** (o que preencher em cada arquivo, bancos, segredos, variáveis, filas, rede, esteira e checklist; [seção 12](#12-relatórios-e-inventário)). `--no-infra` desliga `infra/`, `.iupipes.yml`, `tests/` e o workflow; `--output` muda a pasta.
 
 ---
 
@@ -401,12 +401,21 @@ Em `_migration-report/` (ou `--report`):
 
 | Arquivo | Uso |
 |---|---|
-| `migration-report.html` | navegável: resumo, projetos, dados acessados, arquitetura, modernização, filtros por severidade e busca, erros de build por código |
-| `migration-report.md` | para PR ou wiki, com o diagrama Mermaid |
-| `inventory.xlsx` | abas Resumo, Inventário, Dados acessados, Modernização e Arquitetura AWS |
+| `migration-report.html` | documento navegável com barra de seções, filtros por severidade e busca no inventário, erros de build agrupados por código |
+| `migration-report.md` | o mesmo documento para PR ou wiki, com índice e o diagrama Mermaid |
+| `inventory.xlsx` | abas Resumo, Inventário, Dados acessados, Modernização, Arquitetura AWS e **Implantação** (o guia em tabelas, para distribuir o trabalho) |
 | `inventory.csv`, `modernization.csv`, `data-access.csv` | integração com outras ferramentas (UTF-8 com BOM) |
-| `migration-result.json` | resultado completo (inventário, modernização, arquitetura, hospedagem, bancos, hosts, dados acessados, destino e IaC) |
+| `migration-result.json` | resultado completo (inventário, modernização, arquitetura, hospedagem, bancos, hosts, dados acessados, destino, IaC e o guia de implantação em `deployment`) |
 | `build-verification.log` | saída completa do build (net10) |
+
+O relatório (HTML e Markdown) é organizado como documentação, nesta ordem:
+
+1. **Resumo**: cartões e tabela por projeto (bloqueantes, atenção, automático, build, hospedagem).
+2. **Guia de implantação na AWS**: tudo o que precisa ser configurado para o sistema rodar, com os mesmos nomes dos arquivos gerados em `infra/`. Subseções: *o que roda onde* (projeto → hospedagem, como roda, template → stack, endpoint/health/agendamento, pré-requisitos); *infraestrutura* (arquivos, ordem de deploy e **todos os parâmetros por ambiente**, com os placeholders a preencher marcados); *banco de dados* (cada banco, tecnologia, origem, engine e classe do RDS, endpoint, onde fica a connection string na AWS, notas de migração); *segredos* (nome no Secrets Manager, conteúdo, quem usa, como chega na aplicação, como preencher, quem cria); *variáveis de ambiente e parâmetros da aplicação* (chave → variável `Secao__Chave` ou caminho do Parameter Store, valor por ambiente, origem no código/config); *armazenamento e filas* (buckets, FSx, SQS, como a aplicação encontra cada um); *rede e integrações* (hosts on-premises, SES, Graph, AD, cache...); *esteira* (chaves do `.iupipes.yml`, TAAC, workflow); *checklist* em seis fases (preparar, dados e segredos, serviços, validar, cutover, produção). O guia é gerado também pelo `analyze` (descrevendo o que o `migrate` geraria) e vira o `README.md` do repositório de saída.
+3. **Arquitetura alvo (AWS)**: leitura do arquiteto (LLM), hospedagem por projeto com justificativa, serviços, diagrama, plano em fases, riscos, custo.
+4. **Dados acessados**: bancos, tabelas, campos.
+5. **Modernização**: sugestões por projeto.
+6. **Inventário da migração**: solução e projetos, com bloqueantes, atenção, build, automáticos e informativos.
 
 **Lendo o inventário.** Severidade: **Bloqueante** impede compilar ou funcionar; **Atenção** compila mas pode mudar de comportamento; **Informativo** é registro. **Automático = Sim** significa que a ferramenta já resolveu (fica para auditoria). Regra é um identificador estável para filtrar (`PKG-` pacotes, `CS-`/`WEB`/`NET` código, `VW` views, `CFG-` configuração, `STARTUP-`, `PRJ-` projeto, `BUILD-` e códigos do compilador, `LLM-`, `TEST-`/`SMOKE-`/`DOCKER-`). **% automatizado** = itens automáticos ÷ (automáticos + pendentes), sem os erros de build.
 
@@ -513,7 +522,7 @@ Limitações: VB.NET, Web Sites sem `.csproj`, F# e projetos de banco não são 
 src/Migrator.Core
   Analysis/     WorkspaceLoader, ProjectLoader, StartupAnalyzer, AssemblyInspector (metadados das DLLs locais), ApplicationProfiler (sinais), DataAccessAnalyzer
   Cloud/        ModernizationAdvisor, AwsArchitect (+ .Framework), LambdaScaffolder, InfrastructureGenerator (Terraform),
-                CloudFormationGenerator (+ .Ec2, .EcsService, .Service: templates, parâmetros, CodeDeploy, .iupipes.yml, TAAC, workflows)
+                CloudFormationGenerator (+ .Ec2, .EcsService, .Service, .Guide: templates, parâmetros, CodeDeploy, .iupipes.yml, TAAC, workflows, guia de implantação)
   Llm/          ILlmAssistant, OllamaAssistant, CorporateApiAssistant, CachedLlmAssistant, LlmAssistantFactory, LlmSession,
                 LlmCodeFixer, LlmCodeDrafter, LlmTriage, LlmNarrator, LlmPrompts
   Data/         PackageRules, FrameworkReferenceRules, CodeRules, BuildHints, ModernizationRules, CodeModernizationRules
@@ -522,7 +531,7 @@ src/Migrator.Core
                 CodeTransformer, RazorTransformer, ConfigMigrator, PackagePlanner, PackageAligner, ProjectFileWriter,
                 ProgramGenerator, BuildVerifier, RuntimeVerifier
   NuGet/        NuGetClient, NuGetConfigFile
-  Reporting/    HtmlReport, MarkdownReport, ExcelReport, CsvReport, JsonReport (+ .Cloud, .Data)
+  Reporting/    HtmlReport, MarkdownReport, ExcelReport, CsvReport, JsonReport (+ .Cloud, .Data, .Deployment)
   Portfolio/    PortfolioRunner, PortfolioAggregator, PortfolioReports
 src/Migrator.Cli      analyze / migrate / portfolio (System.CommandLine + Spectre.Console)
 tests/Migrator.Tests  165 testes unitários, de ponta a ponta sobre samples/LegacyShop e snapshots

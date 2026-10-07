@@ -31,58 +31,22 @@ public static partial class CloudFormationGenerator
     public static Dictionary<string, string> Generate(SolutionResult result, IReadOnlyList<(ProjectResult Result, ApplicationProfile Profile)> profiles)
     {
         var files = new Dictionary<string, string>(StringComparer.Ordinal);
-        var arch = result.Architecture;
-        if (arch == null) return files;
-        var components = arch.Components.Select(c => c.Id).ToHashSet(StringComparer.Ordinal);
-        var app = Slug(result.SolutionName);
-        var framework = result.Options.KeepsFramework;
-        var feature = Feature(result);
-        var deployables = profiles
-            .Where(p => p.Result.Hosting is { Primary: not (AwsHosting.NotDeployable or AwsHosting.Desktop) } && p.Result.OutputProjectPath != null)
-            .Select(p => new Deployable(p.Result, p.Profile, Slug(p.Result.Project.Name), Id(p.Result.Project.Name), Logical(p.Result.Project.Name)))
-            .ToList();
-        if (deployables.Count == 0) return files;
-        var lambdas = framework ? [] : deployables.Where(d => d.Result.Hosting!.Primary == AwsHosting.Lambda).ToList();
-        var workers = framework ? [] : deployables.Where(d => d.Result.Hosting!.Primary == AwsHosting.EcsFargateWorker).ToList();
-        var services = deployables.Where(d => d.Result.Hosting!.Primary != AwsHosting.Lambda).ToList();
-        var fileAutomations = lambdas.Where(l => FileDriven(l.Profile)).ToList();
-        var hasDb = result.Databases.Count > 0;
-        var hasS3 = components.Contains("s3") || fileAutomations.Count > 0;
-        var hasFsx = framework && components.Contains("fsx");
-        var secretNames = SecretNames(app, deployables, framework);
-        var hasData = hasDb || hasS3 || hasFsx || workers.Count > 0 || secretNames.Count > 0 || framework;
-        var notGenerated = profiles.Where(p => p.Result.Hosting is { Primary: not (AwsHosting.NotDeployable or AwsHosting.Desktop) } && p.Result.OutputProjectPath == null).Select(p => p.Result).ToList();
-        var templates = new List<Template>();
+        var plan = PlanInfra(result, profiles);
+        if (plan == null || plan.Deployables.Count == 0) return files;
+        var (app, feature, framework, deployables, services, workers, lambdas, fileAutomations, hasDb, hasS3, hasFsx, hasData, secretNames, notGenerated, templates, components) = plan;
 
-        if (hasData)
+        if (hasData) files[$"{InfraDir}/data.yml"] = DataTemplate(result, hasDb, hasS3, hasFsx, framework, fileAutomations, workers, secretNames);
+        foreach (var t in templates.Where(t => t.Deployable != null))
         {
-            files[$"{InfraDir}/data.yml"] = DataTemplate(result, hasDb, hasS3, hasFsx, framework, fileAutomations, workers, secretNames);
-            templates.Add(new("data.yml", $"{feature}-${{ENV}}-data", "parameters-data.json", null));
-        }
-        var first = true;
-        foreach (var d in services)
-        {
+            var d = t.Deployable!;
             var micro = Micro(result, d);
-            var file = first ? "service.yml" : $"service-{micro}.yml";
-            var parameters = first ? "parameters.json" : $"parameters-{micro}.json";
-            files[$"{InfraDir}/{file}"] = framework ? Ec2ServiceTemplate(result, d, micro, hasDb, hasS3, hasFsx, components) : ServiceTemplate(result, d, micro, hasDb, hasS3, workers.Contains(d), components);
-            templates.Add(new(file, $"{feature}-${{ENV}}-{micro}", parameters, d));
-            first = false;
-        }
-        foreach (var l in lambdas)
-        {
-            var micro = Micro(result, l);
-            files[$"{InfraDir}/lambda-{micro}.yml"] = LambdaTemplate(result, l, micro, hasDb, hasS3);
-            templates.Add(new($"lambda-{micro}.yml", $"{feature}-${{ENV}}-{micro}", $"parameters-lambda-{micro}.json", l));
+            files[$"{InfraDir}/{t.File}"] = d.Result.Hosting!.Primary == AwsHosting.Lambda ? LambdaTemplate(result, d, micro, hasDb, hasS3)
+                : framework ? Ec2ServiceTemplate(result, d, micro, hasDb, hasS3, hasFsx, components)
+                : ServiceTemplate(result, d, micro, hasDb, hasS3, workers.Contains(d), components);
         }
         foreach (var environment in Environments)
-        {
-            if (hasData) files[$"{InfraDir}/{environment}/parameters-data.json"] = ParametersJson(DataParameters(result, environment, feature, hasFsx));
-            foreach (var t in templates.Where(t => t.Deployable != null))
-                files[$"{InfraDir}/{environment}/{t.ParametersFile}"] = ParametersJson(t.Deployable!.Result.Hosting!.Primary == AwsHosting.Lambda
-                    ? LambdaParameters(result, t.Deployable, environment, feature)
-                    : framework ? Ec2Parameters(result, t.Deployable, environment, feature) : ServiceParameters(result, t.Deployable, environment, feature, workers.Contains(t.Deployable)));
-        }
+            foreach (var t in templates)
+                files[$"{InfraDir}/{environment}/{t.ParametersFile}"] = ParametersJson(ParametersOf(result, plan, t, environment));
         files[$"{InfraDir}/deploy.sh"] = DeployBash(templates);
         files[$"{InfraDir}/deploy.ps1"] = DeployPowerShell(templates);
         if (framework)

@@ -60,7 +60,8 @@ public static class JsonReport
         Architecture: result.Architecture == null ? null : new ArchitectureDto(
             result.Architecture.Summary, result.Architecture.ExecutiveSummary, result.Architecture.ExecutiveSummaryModel,
             result.Architecture.Components.Select(c => new ComponentDto(c.Id, c.Service, c.Role, c.Replaces, c.Why, c.Required, c.UsedBy.ToList(), c.Notes)).ToList(),
-            result.Architecture.Phases, result.Architecture.Risks, result.Architecture.CostNotes, result.Architecture.Diagram));
+            result.Architecture.Phases, result.Architecture.Risks, result.Architecture.CostNotes, result.Architecture.Diagram),
+        Deployment: result.Deployment);
 
     private static ItemDto Item(InventoryItem i) => new(i.Project, i.RuleId, i.Severity, i.Category, i.AutoMigrated, i.RequiresAction, i.Title, i.Description, i.Suggestion, i.FilePath, i.Line, i.Occurrences);
 
@@ -72,7 +73,7 @@ public static class JsonReport
 
     public sealed record MigrationResultDto(string Solution, string RootDir, string? OutputDir, string Mode, DateTime GeneratedAt, bool NuGetChecked, bool? BuildSucceeded,
         CloudTarget Cloud, MigrationTarget Target, IacTool? Iac, string? LlmModel, int LlmCalls, TotalsDto Totals, List<ProjectDto> Projects, List<ItemDto> GlobalItems, List<ModernizationDto> GlobalModernizations,
-        List<DatabaseDto> Databases, List<string> InternalHosts, List<DataAccessDto> DataAccess, ArchitectureDto? Architecture);
+        List<DatabaseDto> Databases, List<string> InternalHosts, List<DataAccessDto> DataAccess, ArchitectureDto? Architecture, DeploymentGuide? Deployment);
 
     public sealed record TotalsDto(int Breaking, int Warnings, int Automatic, int Modernizations, int HighImpactModernizations);
 

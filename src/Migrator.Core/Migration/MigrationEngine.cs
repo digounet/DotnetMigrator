@@ -117,6 +117,7 @@ public sealed class MigrationEngine
         {
             progress?.Report("Avaliando arquitetura alvo na AWS...");
             profiles = AdviseCloud(result, migrated, ordered); // may add Lambda packages/properties to the specs
+            result.Deployment = CloudFormationGenerator.Guide(result, profiles);
         }
 
         foreach (var project in migrated.Where(p => p.Spec != null))
@@ -138,9 +139,9 @@ public sealed class MigrationEngine
                         Project = "(solução)", Severity = InventorySeverity.Info, Category = InventoryCategory.ProjectFile, RuleId = "AWS-INFRA",
                         Title = $"Infraestrutura como código gerada: {files.Count(f => (f.Key.EndsWith(".yaml", StringComparison.Ordinal) || f.Key.EndsWith(".yml", StringComparison.Ordinal)) && f.Key.StartsWith("infra/", StringComparison.Ordinal))} templates CloudFormation + pipeline de deploy",
                         Description = options.KeepsFramework
-                            ? "infra/cloudformation/ (VPC, EC2 Windows em Auto Scaling, ALB, RDS, S3/FSx, IAM, CodeDeploy, alarmes), infra/codedeploy/ (appspec + scripts PowerShell por projeto) e .github/workflows/deploy.yml (MSBuild em runner Windows); infra/README.md traz a ordem de execução."
-                            : "infra/cloudformation/ (VPC, ECS/ALB, tarefas agendadas, workers, Lambda, RDS, S3, IAM, alarmes) e .github/workflows/deploy.yml; infra/README.md traz a ordem de execução.",
-                        Suggestion = "Revise parameters.example.json e rode infra/cloudformation/deploy.sh (ou deploy.ps1) na ordem indicada; crie os segredos no Secrets Manager antes do primeiro deploy.", AutoMigrated = true, FilePath = "infra/README.md"
+                            ? "infra/service*.yml (EC2 Windows em Auto Scaling, regra no ALB compartilhado, CodeDeploy, Parameter Store, alarmes), infra/data.yml (RDS, S3/FSx, segredos), infra/{dev,hom,prod}/parameters*.json, infra/codedeploy/ (appspec + scripts PowerShell por projeto), .iupipes.yml, tests/ e .github/workflows/deploy.yml; o guia de implantação do relatório e o README da saída dizem o que preencher."
+                            : "infra/service*.yml (ECS Fargate no padrão da plataforma), infra/lambda-*.yml, infra/data.yml (RDS, S3, filas, segredos), infra/{dev,hom,prod}/parameters*.json, .iupipes.yml, tests/ e .github/workflows/deploy.yml; o guia de implantação do relatório e o README da saída dizem o que preencher.",
+                        Suggestion = "Preencha infra/<env>/parameters*.json e .iupipes.yml, rode infra/deploy.sh (ou deploy.ps1) na ordem indicada e coloque os valores nos segredos antes do primeiro deploy (seção Guia de implantação).", AutoMigrated = true, FilePath = "infra/README.md"
                     }
                     : new InventoryItem
                     {
@@ -159,7 +160,7 @@ public sealed class MigrationEngine
             CopyRootFiles(workspace.RootDir, result.SourceDir!, result);
             WriteNuGetConfig(nugetConfig, nugetSource, result);
             WriteRootGitIgnore(result.OutputDir!);
-            WriteRootFiles(result.OutputDir!);
+            WriteRootFiles(result, result.OutputDir!);
             await File.WriteAllTextAsync(Path.Combine(result.OutputDir!, WorkspaceLoader.OutputMarkerFile),
                 $"Gerado pelo Migrator em {DateTime.Now:O} a partir de {workspace.RootDir}{Environment.NewLine}", cancellationToken);
 
@@ -435,13 +436,21 @@ public sealed class MigrationEngine
     }
 
     /// <summary>Root files every repository of the platform carries.</summary>
-    private static void WriteRootFiles(string outputDir)
+    private static void WriteRootFiles(SolutionResult result, string outputDir)
     {
         var attributes = Path.Combine(outputDir, ".gitattributes");
         if (!File.Exists(attributes)) File.WriteAllText(attributes, "* text=auto\n*.sh text eol=lf\n*.ps1 text eol=crlf\n*.cs diff=csharp\n");
         var readme = Path.Combine(outputDir, "README.md");
-        if (!File.Exists(readme))
-            File.WriteAllText(readme, "# Aplicação migrada pelo Migrator\n\n- `app/src/`: a solução (código e projetos).\n- `infra/`: CloudFormation da aplicação (`service.yml`, `data.yml`) e `dev/`, `hom/`, `prod/` com os parâmetros por ambiente; leia `infra/README.md`.\n- `tests/`: specs dos testes de aceitação (TAAC) executados pela esteira.\n- `.iupipes.yml`: descritor da esteira.\n- `_migration-report/`: inventário, modernização, dados acessados e arquitetura (não versionar).\n");
+        if (File.Exists(readme)) return;
+        var sb = new System.Text.StringBuilder();
+        sb.Append($"# {result.SolutionName}\n\nRepositório gerado pelo Migrator ({result.Options.Target.Display()}, infraestrutura em {result.Options.EffectiveIac.Display()}).\n\n");
+        sb.Append("- `app/src/`: a solução (código e projetos); working-directory da esteira.\n");
+        sb.Append(result.Options.EffectiveIac == IacTool.CloudFormation
+            ? "- `infra/`: CloudFormation da aplicação (`service*.yml`, `data.yml`) e `dev/`, `hom/`, `prod/` com os parâmetros por ambiente; `infra/README.md` traz as convenções da plataforma.\n"
+            : "- `infra/terraform/`: módulo Terraform da aplicação; `infra/README.md` traz a ordem de execução.\n");
+        sb.Append("- `tests/`: specs dos testes de aceitação (TAAC) executados pela esteira.\n- `.iupipes.yml`: descritor da esteira.\n- `_secrets/`: valores das credenciais retiradas do código/configs (fora do git).\n- `_migration-report/`: inventário, modernização, dados acessados e arquitetura (não versionar).\n\n");
+        if (result.Deployment != null) sb.Append(Reporting.MarkdownReport.RenderDeploymentGuide(result, 2));
+        File.WriteAllText(readme, sb.ToString().Replace("\r\n", "\n"), new System.Text.UTF8Encoding(false));
     }
 
     private static void WriteRootGitIgnore(string outputDir)

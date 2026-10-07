@@ -22,9 +22,19 @@ public static partial class MarkdownReport
         if (result.LlmModel != null) sb.AppendLine($"- **LLM:** {result.LlmModel} ({result.LlmCalls} chamada(s))");
         sb.AppendLine();
 
-        sb.AppendLine("## Resumo");
-        sb.AppendLine();
         var aws = result.Architecture != null;
+        var modernizations = result.AllModernizations.Any();
+        var sections = new List<(string Title, string Anchor)> { ("1. Resumo", "1-resumo") };
+        if (result.Deployment != null) sections.Add(("2. Guia de implantação na AWS", "2-guia-de-implantação-na-aws"));
+        if (aws) sections.Add(("3. Arquitetura alvo (AWS)", "3-arquitetura-alvo-aws"));
+        sections.Add(("4. Dados acessados (bancos, tabelas e campos)", "4-dados-acessados-bancos-tabelas-e-campos"));
+        if (modernizations) sections.Add(("5. Modernização", "5-modernização"));
+        sections.Add(("6. Inventário da migração", "6-inventário-da-migração"));
+        foreach (var (title, anchor) in sections) sb.AppendLine($"- [{title}](#{anchor})");
+        sb.AppendLine();
+
+        sb.AppendLine("## 1. Resumo");
+        sb.AppendLine();
         sb.AppendLine("| Projeto | Tipo | Origem | Bloqueantes | Atenção | Automático | % automatizado | Build |" + (aws ? " Modernização | AWS |" : ""));
         sb.AppendLine("|---|---|---|---:|---:|---:|---:|---|" + (aws ? "---:|---|" : ""));
         foreach (var p in result.Projects)
@@ -32,35 +42,40 @@ public static partial class MarkdownReport
                 (aws ? $" {p.Modernizations.Count} | {Cell(p.Hosting?.Primary.Short() ?? "—")} |" : ""));
         sb.AppendLine();
 
-        RenderDataAccess(sb, result);
+        if (result.Deployment != null) RenderDeployment(sb, result, 2, "2");
         if (result.Architecture != null) RenderArchitecture(sb, result);
+        RenderDataAccess(sb, result);
         RenderModernization(sb, result);
 
+        sb.AppendLine("## 6. Inventário da migração");
+        sb.AppendLine();
+        sb.AppendLine("O que a ferramenta resolveu e o que ainda exige ação, por projeto. Bloqueante impede compilar ou funcionar; Atenção compila mas pode mudar de comportamento; Automático já foi feito (registro para auditoria).");
+        sb.AppendLine();
         if (result.GlobalItems.Count > 0)
         {
-            sb.AppendLine("## Solução");
+            sb.AppendLine("### Solução");
             sb.AppendLine();
-            RenderItems(sb, result.GlobalItems);
+            RenderItems(sb, result.GlobalItems, "####");
         }
 
         foreach (var p in result.Projects)
         {
-            sb.AppendLine($"## {p.Project.Name}");
+            sb.AppendLine($"### {p.Project.Name}");
             sb.AppendLine();
             sb.AppendLine($"{ReportWriter.KindLabel(p.Project)} · {p.Project.TargetFramework} → {ReportWriter.TargetMoniker(result)} · pasta `{(p.RelativeDir.Length == 0 ? "." : p.RelativeDir)}`");
             sb.AppendLine();
-            RenderItems(sb, p.Inventory);
+            RenderItems(sb, p.Inventory, "####");
         }
         return sb.ToString();
     }
 
-    private static void RenderItems(StringBuilder sb, List<InventoryItem> items)
+    private static void RenderItems(StringBuilder sb, List<InventoryItem> items, string heading = "###")
     {
         void Section(string title, IEnumerable<InventoryItem> source)
         {
             var list = ReportWriter.Ordered(source).ToList();
             if (list.Count == 0) return;
-            sb.AppendLine($"### {title} ({list.Count})");
+            sb.AppendLine($"{heading} {title} ({list.Count})");
             sb.AppendLine();
             foreach (var item in list)
             {
@@ -80,7 +95,7 @@ public static partial class MarkdownReport
         var build = items.Where(i => i.Category == InventoryCategory.Build).ToList();
         if (build.Count > 0)
         {
-            sb.AppendLine($"### Build de verificação ({build.Count})");
+            sb.AppendLine($"{heading} Build de verificação ({build.Count})");
             sb.AppendLine();
             sb.AppendLine($"> {HtmlReport.BuildNote}");
             sb.AppendLine();
@@ -106,7 +121,7 @@ public static partial class MarkdownReport
         var automatic = ReportWriter.Ordered(items.Where(i => i.AutoMigrated)).ToList();
         if (automatic.Count > 0)
         {
-            sb.AppendLine($"### Resolvido automaticamente ({automatic.Count})");
+            sb.AppendLine($"{heading} Resolvido automaticamente ({automatic.Count})");
             sb.AppendLine();
             foreach (var item in automatic)
                 sb.AppendLine($"- {Inline(item.Title)}{(item.Description.Length > 0 ? $" — {Inline(item.Description)}" : "")}");

@@ -105,6 +105,8 @@ public sealed class SolutionResult
     public List<InventoryItem> GlobalItems { get; } = [];
     public List<ModernizationItem> GlobalModernizations { get; } = [];
     public ArchitectureProposal? Architecture { get; set; }
+    /// <summary>What must be configured for the application to run on AWS (hosting, infra parameters, databases, secrets, settings, storage, network, pipeline, checklist); null with --cloud none.</summary>
+    public DeploymentGuide? Deployment { get; set; }
     /// <summary>Databases referenced by the deployable projects (from connection strings), for the portfolio view.</summary>
     public List<DatabaseUse> Databases { get; } = [];
     /// <summary>On-premises hosts (internal DNS names / private IPs) the application talks to.</summary>

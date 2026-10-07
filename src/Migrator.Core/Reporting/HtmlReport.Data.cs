@@ -12,7 +12,7 @@ public static partial class HtmlReport
 
     private static void RenderDataAccess(StringBuilder sb, SolutionResult result, List<(string Database, string Technology, List<TableAccess> Tables)> groups)
     {
-        sb.Append("<div class=\"panel\" id=\"dados\"><h2>Dados acessados (bancos, tabelas e campos)</h2><div class=\"body\">");
+        sb.Append("<div class=\"panel\" id=\"dados\"><h2>4. Dados acessados (bancos, tabelas e campos)</h2><div class=\"body\">");
         sb.Append($"<p class=\"lead\">{E(DataAccessLead)}</p>");
         foreach (var (database, technology, tables) in groups)
         {

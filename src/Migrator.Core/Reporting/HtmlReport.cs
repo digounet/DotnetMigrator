@@ -75,6 +75,12 @@ public static partial class HtmlReport
         .ok { color: var(--green); font-weight: 600; } .fail { color: var(--red); font-weight: 600; }
         .empty { padding: 16px; color: var(--muted); }
         footer { text-align: center; color: var(--muted); font-size: 12px; padding: 24px; }
+        nav.sections { display: flex; flex-wrap: wrap; gap: 4px 18px; padding: 10px 32px; background: #fff; border-bottom: 1px solid var(--border); font-size: 13px; }
+        nav.sections a { color: var(--blue); text-decoration: none; font-weight: 600; } nav.sections a:hover { text-decoration: underline; }
+        .panel h4 { margin: 16px 0 6px; font-size: 14px; }
+        .panel p.toc { margin: 0 0 12px; display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; } .panel p.toc a { text-decoration: none; }
+        ul.checklist { list-style: none; padding-left: 4px; } ul.checklist li { margin-bottom: 4px; } ul.checklist input { margin-right: 6px; }
+        .panel table + h4 { margin-top: 20px; }
         """;
 
     private const string Script = """
@@ -118,9 +124,15 @@ public static partial class HtmlReport
         sb.Append($"<span>NuGet verificado: {(result.NuGetChecked ? "sim" : "não")}{(result.NuGetSource != null ? $" · feed: {E(result.NuGetSource)}" : "")}</span>");
         sb.Append($"<span>Build: {result.BuildSucceeded switch { true => "sucesso", false => "com erros", null => "não executado" }}</span>");
         if (result.LlmModel != null) sb.Append($"<span>LLM: {E(result.LlmModel)} ({result.LlmCalls} chamada(s))</span>");
-        sb.Append("</div></header><main>");
+        sb.Append("</div></header>");
+        sb.Append("<nav class=\"sections\"><a href=\"#resumo\">1. Resumo</a>");
+        if (result.Deployment != null) sb.Append("<a href=\"#implantacao\">2. Guia de implantação</a>");
+        if (result.Architecture != null) sb.Append("<a href=\"#aws\">3. Arquitetura alvo</a>");
+        if (result.AllDataAccess.Any()) sb.Append("<a href=\"#dados\">4. Dados acessados</a>");
+        if (result.AllModernizations.Any()) sb.Append("<a href=\"#modernizacao\">5. Modernização</a>");
+        sb.Append("<a href=\"#inventario\">6. Inventário</a></nav><main>");
 
-        sb.Append("<div class=\"cards\">");
+        sb.Append("<div class=\"cards\" id=\"resumo\">");
         Card(sb, "", result.Projects.Count.ToString(), "Projetos");
         Card(sb, "red", breaking.ToString(), "Ações bloqueantes");
         Card(sb, "amber", warnings.ToString(), "Pontos de atenção");
@@ -132,7 +144,7 @@ public static partial class HtmlReport
         if (dataAccess.Count > 0) Card(sb, "blue", dataAccess.Sum(d => d.Tables.Count).ToString(), $"Tabelas/procedures acessadas em {dataAccess.Count} banco(s)");
         sb.Append("</div>");
 
-        sb.Append("<div class=\"panel\"><h2>Projetos</h2><table><thead><tr><th>Projeto</th><th>Tipo</th><th>Origem</th>")
+        sb.Append("<div class=\"panel\"><h2>1. Resumo por projeto</h2><table><thead><tr><th>Projeto</th><th>Tipo</th><th>Origem</th>")
           .Append("<th class=\"num\">Bloqueantes</th><th class=\"num\">Atenção</th><th class=\"num\">Automático</th><th class=\"num\">% automatizado</th><th>Build</th>" + (result.Architecture != null ? "<th>AWS</th>" : "") + "</tr></thead><tbody>");
         foreach (var p in result.Projects)
         {
@@ -147,11 +159,13 @@ public static partial class HtmlReport
         }
         sb.Append("</tbody></table></div>");
 
-        if (dataAccess.Count > 0) RenderDataAccess(sb, result, dataAccess);
+        if (result.Deployment != null) RenderDeployment(sb, result);
         if (result.Architecture != null) RenderArchitecture(sb, result);
+        if (dataAccess.Count > 0) RenderDataAccess(sb, result, dataAccess);
         if (modernizations.Count > 0) RenderModernization(sb, result, modernizations);
 
-        sb.Append("<h2 class=\"section-h\">Inventário da migração</h2>");
+        sb.Append("<h2 class=\"section-h\" id=\"inventario\">6. Inventário da migração</h2>");
+        sb.Append("<p class=\"empty\">O que a ferramenta resolveu e o que ainda exige ação, por projeto. Bloqueante impede compilar ou funcionar; Atenção compila mas pode mudar de comportamento; Automático já foi feito (registro para auditoria).</p>");
         sb.Append("<div class=\"filters\"><input id=\"q\" type=\"search\" placeholder=\"Filtrar por texto, arquivo, regra...\">");
         sb.Append("<label><input type=\"checkbox\" data-filter=\"breaking\" checked> Bloqueante</label>");
         sb.Append("<label><input type=\"checkbox\" data-filter=\"warning\" checked> Atenção</label>");

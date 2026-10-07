@@ -147,9 +147,16 @@ public sealed class SampleSolutionTests : IDisposable
         Assert.Contains(arch.Risks, r => r.Contains("Integrated Security"));
 
         var markdown = File.ReadAllText(Path.Combine(reportDir, "migration-report.md"));
-        Assert.Contains("## Arquitetura alvo (AWS)", markdown);
+        Assert.Contains("## 3. Arquitetura alvo (AWS)", markdown);
+        Assert.Contains("## 2. Guia de implantação na AWS", markdown);
+        var guide = result.Deployment!;
+        Assert.False(guide.InfrastructureWritten);                                                  // analyze describes what migrate would write
+        Assert.Contains(guide.Units, u => u.Project == "LegacyShop.Relatorios" && u.NotGenerated != null && u.Micro == "relatorios");
+        Assert.Contains(guide.Settings, s => s.Key == "AppSettings:Urls:ErpProtocoloUrl" && s.EnvironmentVariable == "AppSettings__Urls__ErpProtocoloUrl" && s.ParameterStorePath == null);
+        Assert.Single(guide.Settings, s => s.Kind == "Ambiente" && s.EnvironmentVariable == "FILES_BUCKET");
+        Assert.Contains(guide.Secrets, s => s.Name == "legacyshop/legacyshop.web/Smtp/Password" && s.DeliveredAs!.Contains("Smtp__Password"));
         Assert.Contains("```mermaid", markdown);
-        Assert.Contains("## Modernização", markdown);
+        Assert.Contains("## 5. Modernização", markdown);
     }
 
     [Fact]

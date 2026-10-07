@@ -9,7 +9,7 @@ public static partial class MarkdownReport
     {
         var groups = ReportWriter.DataAccessByDatabase(result);
         if (groups.Count == 0) return;
-        sb.AppendLine("## Dados acessados (bancos, tabelas e campos)");
+        sb.AppendLine("## 4. Dados acessados (bancos, tabelas e campos)");
         sb.AppendLine();
         sb.AppendLine(HtmlReport.DataAccessLead);
         sb.AppendLine();

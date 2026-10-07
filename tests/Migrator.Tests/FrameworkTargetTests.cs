@@ -97,6 +97,26 @@ public sealed class FrameworkTargetTests : IDisposable
         var relatorios = result.Projects.Single(p => p.Project.Name == "LegacyShop.Relatorios");
         Assert.Contains(relatorios.Inventory, i => i.RuleId == "PRJ-DLL" && i.Severity == InventorySeverity.Info && i.Title.Contains("Legacy.Impressao") && i.Description.Contains("Nada muda no destino .NET Framework"));
         Assert.Contains(relatorios.Hosting!.Rationale, r => r.Contains("Registro do Windows (DLL Legacy.Impressao)"));
+
+        // Deployment guide: the same names as the generated files, in the report, the repository README and the JSON.
+        var guide = result.Deployment!;
+        Assert.True(guide.InfrastructureWritten);
+        Assert.Equal(["web", "worker", "importador", "relatorios"], guide.Units.Select(u => u.Micro));
+        Assert.Equal("service-worker.yml", guide.Units.Single(u => u.Project == "LegacyShop.Worker").TemplateFile);
+        Assert.Contains(guide.Parameters, p => p.Name == "VPCID" && p.Placeholder && p.Files.Contains("parameters-data.json") && p.Values["prod"] == "vpc-xxxxxxxxxxxxxxxxx");
+        Assert.Contains(guide.Parameters, p => p.Name == "MicroServiceName" && p.Values["dev"] == "(varia por arquivo)");
+        Assert.Contains(guide.Databases, d => d.Name == "LegacyShop" && d.Provider == "SQL Server" && d.RdsEngine == "sqlserver-ex" && d.ConnectionSecrets.Any(c => c.StartsWith("legacyshop/legacyshop-web/config")));
+        Assert.Contains(guide.Secrets, s => s.Name == "legacyshop/legacyshop-web/config");
+        Assert.Contains(guide.Secrets, s => s.Name == "legacyshop/legacyshop.web/AppSettings/Credenciais/TokenIntegracaoErp" && s.UsedBy.Contains("LegacyShop.Web"));
+        Assert.Contains(guide.Settings, s => s.Key == "AppSettings:Urls:ErpProtocoloUrl" && s.ParameterStorePath == "/legacyshop/<env>/Urls/ErpProtocoloUrl" && s.EnvironmentVariable == null);
+        Assert.Contains(guide.Storage, r => r.Service.StartsWith("Amazon FSx"));
+        Assert.Contains(guide.Integrations, i => i.Kind == "Rede on-premises" && i.Target == "srv-sql01");
+        Assert.Contains(guide.Pipeline, p => p.File == ".iupipes.yml" && p.Key == "deploy.aws.prod.account");
+        Assert.Contains(guide.Checklist, c => c.Phase.StartsWith("2.") && c.Step.Contains("segredos"));
+        var readme = Read("README.md");
+        Assert.Contains("## Guia de implantação na AWS", readme);
+        Assert.Contains("legacyshop/legacyshop-web/config", readme);
+        Assert.Contains("\"deployment\"", File.ReadAllText(Path.Combine(result.ReportDir!, "migration-result.json")));
         Assert.Contains(web.Hosting!.Rationale, r => r.Contains("ECS Fargate (Linux) + ALB"));
         Assert.Contains(result.Projects[4].Hosting!.Rationale, r => r.Contains("AWS Lambda"));
         Assert.Contains(result.Projects[4].Hosting!.Prerequisites, p => p.Contains("FSx"));
@@ -191,7 +211,7 @@ public sealed class FrameworkTargetTests : IDisposable
         var markdown = File.ReadAllText(Path.Combine(result.ReportDir!, "migration-report.md"));
         Assert.Contains("# Atualização para .NET Framework 4.8.1 + infraestrutura AWS", markdown);
         Assert.Contains("v4.5 → v4.8.1", markdown);
-        Assert.Contains("## Dados acessados", markdown);
+        Assert.Contains("## 4. Dados acessados", markdown);
     }
 
     [Fact]
@@ -236,6 +256,21 @@ public sealed class FrameworkTargetTests : IDisposable
         Assert.Contains("docker buildx build --platform linux/arm64", Read(".github/workflows/deploy.yml"));
         Assert.Contains("dotnet lambda deploy-function", Read(".github/workflows/deploy.yml"));
         Assert.Contains("LegacyShop.Relatorios", Read("infra/README.md"));
+
+        // Deployment guide (net10 + CloudFormation + serverless): ECS services, the Lambda, secrets as task-definition variables.
+        var guide = result.Deployment!;
+        Assert.True(guide.InfrastructureWritten);
+        Assert.Equal(["web", "worker", "importador", "relatorios"], guide.Units.Select(u => u.Micro));
+        Assert.Equal("lambda-importador.yml", guide.Units.Single(u => u.Project == "LegacyShop.Importador").TemplateFile);
+        Assert.NotNull(guide.Units.Single(u => u.Project == "LegacyShop.Relatorios").NotGenerated);
+        Assert.Contains(guide.Parameters, p => p.Name == "EcsClusterName" && p.Values["dev"] == "ecs-cluster-legacyshop-fargate");
+        Assert.Contains(guide.Parameters, p => p.Name == "ListenerContainerPort" && p.Group == "Compartilhada");
+        Assert.Contains(guide.Secrets, s => s.Name == "legacyshop/legacyshop.web/Smtp/Password" && s.DeliveredAs!.Contains("Smtp__Password"));
+        Assert.Contains(guide.Settings, s => s.Key == "AppSettings:Urls:ErpProtocoloUrl" && s.EnvironmentVariable == "AppSettings__Urls__ErpProtocoloUrl");
+        Assert.Contains(guide.Storage, r => r.Name.Contains("artifacts (PackageBucket)"));
+        Assert.Contains(guide.Queues, q => q.Name.StartsWith("legacyshop-<env>-files-events"));
+        Assert.Contains("## Guia de implantação na AWS", Read("README.md"));
+        Assert.Contains("\"deployment\"", File.ReadAllText(Path.Combine(result.ReportDir!, "migration-result.json")));
         Assert.Equal(AwsHosting.Lambda, result.Projects[4].Hosting!.Primary);
         Assert.Contains(result.GlobalItems, i => i.RuleId == "AWS-INFRA" && i.Title.Contains("CloudFormation"));
     }

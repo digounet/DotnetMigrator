@@ -8,7 +8,7 @@ public static partial class MarkdownReport
     private static void RenderArchitecture(StringBuilder sb, SolutionResult result)
     {
         var a = result.Architecture!;
-        sb.AppendLine("## Arquitetura alvo (AWS)");
+        sb.AppendLine("## 3. Arquitetura alvo (AWS)");
         sb.AppendLine();
         sb.AppendLine(Inline(a.Summary));
         sb.AppendLine();
@@ -70,7 +70,7 @@ public static partial class MarkdownReport
     {
         var items = result.AllModernizations.ToList();
         if (items.Count == 0) return;
-        sb.AppendLine($"## Modernização ({items.Count})");
+        sb.AppendLine($"## 5. Modernização ({items.Count})");
         sb.AppendLine();
         sb.AppendLine("Sugestões que não bloqueiam a compilação: bibliotecas que passaram a ser pagas ou foram descontinuadas, código C# que compila mas muda de comportamento no .NET 10/Linux, e adaptações para a AWS. Detalhes completos em `modernization.csv` e na aba Modernização do `inventory.xlsx`.");
         sb.AppendLine();
