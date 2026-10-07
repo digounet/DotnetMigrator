@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using Migrator.Core.Models;
 
 namespace Migrator.Core.Reporting;
@@ -10,10 +10,11 @@ public static partial class MarkdownReport
     public static string Render(SolutionResult result)
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"# Migração .NET Framework → .NET 10 — {result.SolutionName}");
+        sb.AppendLine($"# {ReportWriter.Title(result)} — {result.SolutionName}");
         sb.AppendLine();
         sb.AppendLine($"- **Origem:** `{result.RootDir}`");
         sb.AppendLine($"- **Modo:** {ReportWriter.ModeLabel(result)}");
+        sb.AppendLine($"- **Destino:** {result.Options.Target.Display()}");
         if (result.OutputDir != null) sb.AppendLine($"- **Saída:** `{result.OutputDir}`");
         sb.AppendLine($"- **Gerado em:** {result.FinishedAt:dd/MM/yyyy HH:mm}");
         sb.AppendLine($"- **Compatibilidade NuGet verificada:** {(result.NuGetChecked ? "sim" : "não")}{(result.NuGetSource != null ? $" (feed: {result.NuGetSource})" : "")}");
@@ -31,6 +32,7 @@ public static partial class MarkdownReport
                 (aws ? $" {p.Modernizations.Count} | {Cell(p.Hosting?.Primary.Short() ?? "—")} |" : ""));
         sb.AppendLine();
 
+        RenderDataAccess(sb, result);
         if (result.Architecture != null) RenderArchitecture(sb, result);
         RenderModernization(sb, result);
 
@@ -45,7 +47,7 @@ public static partial class MarkdownReport
         {
             sb.AppendLine($"## {p.Project.Name}");
             sb.AppendLine();
-            sb.AppendLine($"{ReportWriter.KindLabel(p.Project)} · {p.Project.TargetFramework} → net10.0 · pasta `{(p.RelativeDir.Length == 0 ? "." : p.RelativeDir)}`");
+            sb.AppendLine($"{ReportWriter.KindLabel(p.Project)} · {p.Project.TargetFramework} → {ReportWriter.TargetMoniker(result)} · pasta `{(p.RelativeDir.Length == 0 ? "." : p.RelativeDir)}`");
             sb.AppendLine();
             RenderItems(sb, p.Inventory);
         }

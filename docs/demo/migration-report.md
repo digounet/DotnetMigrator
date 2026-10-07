@@ -2,8 +2,9 @@
 
 - **Origem:** `/Users/pablo/Source/dotnet/DotnetMigrator/DotnetMigrator/samples/LegacyShop`
 - **Modo:** Análise (nenhum arquivo alterado)
-- **Gerado em:** 02/10/2026 06:14
-- **Compatibilidade NuGet verificada:** não
+- **Destino:** .NET 10
+- **Gerado em:** 06/10/2026 21:57
+- **Compatibilidade NuGet verificada:** não (feed: nuget.org (https://api.nuget.org/v3/index.json))
 - **Build de verificação:** não executado
 
 ## Resumo
@@ -16,6 +17,23 @@
 | LegacyShop.Tests | Testes | v4.6.1 | 0 | 0 | 4 | 100% | não executado (análise) | 0 | — |
 | LegacyShop.Importador | Console | v4.5 | 0 | 3 | 11 | 79% | não executado (análise) | 7 | Lambda |
 | LegacyShop.Relatorios | Console · VB.NET | v4.5 | 1 | 0 | 0 | 0% | não executado (análise) | 5 | ECS Windows |
+
+## Dados acessados (bancos, tabelas e campos)
+
+Bancos, tabelas, procedures e campos que o código acessa, extraídos de SQL em literais C#/VB e arquivos .sql, leitores ADO.NET, chamadas Dapper, modelos EF6/EF Core e EDMX. O banco é resolvido pelas connection strings (nome três partes no SQL > nome da connection string citada no código > banco único do projeto ou de quem o hospeda). Análise estática: tabelas montadas dinamicamente e colunas lidas por índice não aparecem; confira com o DBA antes de migrar os dados.
+
+### LegacyShop (SQL Server) — 2 tabela(s), 0 procedure(s)
+
+| Tabela / procedure | Campos acessados | Operações | Acesso | Projetos | Onde |
+|---|---|---|---|---|---|
+| **PedidoImportado** | Cliente, Data, Numero, Valor | INSERT | ADO.NET | LegacyShop.Importador | `ImportadorDePedidos.cs:74` |
+| **Produto** | Categoria, Descricao, Destaque, Id, Nome, Preco | DELETE, EF (escrita), EF (leitura), SELECT | arquivo .sql, Dapper, EF6 | LegacyShop.Core | `Services/ProdutoService.cs:81; Sql/ConsultaDestaques.sql; Data/ShopContext.cs:13` |
+
+### Relatorios (SQL Server) — 1 tabela(s), 0 procedure(s)
+
+| Tabela / procedure | Campos acessados | Operações | Acesso | Projetos | Onde |
+|---|---|---|---|---|---|
+| **Vendas** | *, Mes, Produto, Valor | SELECT | ADO.NET | LegacyShop.Relatorios | `GeradorRelatorio.vb:16` |
 
 ## Arquitetura alvo (AWS)
 
@@ -43,7 +61,7 @@ LegacyShop tem 6 projeto(s): 1 aplicação web, 1 biblioteca, 1 Windows Service,
 | **Amazon ECR** | Registro das imagens Docker | pastas de publish / MSDeploy | Imagens versionadas por commit, scan de vulnerabilidades (Inspector) e lifecycle policy. | LegacyShop.Importador, LegacyShop.Relatorios, LegacyShop.Web, LegacyShop.Worker | obrigatório |
 | **Amazon S3 Event Notifications → SQS** | Gatilho das automações de arquivo | FileSystemWatcher / varredura periódica de pasta | Cada arquivo novo no bucket gera um evento; a fila garante retry e DLQ e dispara a Lambda ou escala o worker. Elimina o polling e a janela em que o arquivo ainda está sendo copiado. _Use prefixos por tipo de arquivo e um prefixo 'processados/' para mover após o sucesso._ | LegacyShop.Importador, LegacyShop.Relatorios | obrigatório |
 | **Amazon EventBridge Scheduler** | Agendamento de tarefas (cron) que disparam tarefas ECS ou Lambdas | Timers em Windows Services / Quartz / Task Scheduler | Cron gerenciado com retry, DLQ e histórico; a task roda só quando necessário. _Para jobs que precisam de lock, o Scheduler já garante uma execução por horário._ | LegacyShop.Worker | obrigatório |
-| **Amazon RDS for SQL Server** | Banco de dados (LegacyShop, Relatorios) | SQL Server em (LocalDb)\MSSQLLocalDB, srv-sql01 | Mesmo engine, backups automáticos, Multi-AZ e patching gerenciado; restore nativo a partir de .bak no S3 para migrar os dados. _Licença inclusa (Standard/Enterprise/Web/Express). Integrated Security exige AWS Managed Microsoft AD; prefira autenticação SQL + Secrets Manager. Para reduzir licenciamento a longo prazo: Aurora PostgreSQL com Babelfish._ | LegacyShop.Web, LegacyShop.Worker | obrigatório |
+| **Amazon RDS for SQL Server** | Banco de dados (LegacyShop, Relatorios); 3 tabela(s) acessadas: Produto, PedidoImportado, Vendas — detalhes na seção 'Dados acessados' | SQL Server em (LocalDb)\MSSQLLocalDB, srv-sql01 | Mesmo engine, backups automáticos, Multi-AZ e patching gerenciado; restore nativo a partir de .bak no S3 para migrar os dados. _Licença inclusa (Standard/Enterprise/Web/Express). Integrated Security exige AWS Managed Microsoft AD; prefira autenticação SQL + Secrets Manager. Para reduzir licenciamento a longo prazo: Aurora PostgreSQL com Babelfish._ | LegacyShop.Web, LegacyShop.Worker | obrigatório |
 | **Amazon ElastiCache (Valkey / Redis OSS)** | Sessão distribuída, cache compartilhado e backplane do SignalR | sessão InProc, HttpRuntime.Cache/MemoryCache, coleções estáticas | Permite mais de uma task por serviço sem perder sessão nem divergir cache; ElastiCache Serverless cobra por uso. _Pacotes: Microsoft.Extensions.Caching.StackExchangeRedis, Microsoft.AspNetCore.SignalR.StackExchangeRedis._ | LegacyShop.Web | obrigatório |
 | **Amazon S3** | Arquivos (uploads, exportações, App_Data, logs de acesso) | pastas locais/rede: C:\Exportacao, C:\Exportacao\Estoque, arquivos, C:\Importacao\Processados | Durável e compartilhado entre instâncias; URLs pré-assinadas para upload/download direto; eventos S3 disparam processamento (SQS/Lambda). Lifecycle para Glacier reduz custo de histórico. _Bloqueie acesso público, habilite versionamento e criptografia SSE-S3/KMS. Acesso via task role (sem chaves)._ | LegacyShop.Importador, LegacyShop.Relatorios, LegacyShop.Web, LegacyShop.Worker | obrigatório |
 | **Amazon SES** | Envio de e-mail transacional | SMTP smtp.exemplo.com.br | Endpoint SMTP compatível (porta 587) ou API; métricas de bounce/complaint; DKIM gerenciado. _Verifique domínio e saia do sandbox antes do go-live._ | LegacyShop.Importador, LegacyShop.Relatorios, LegacyShop.Web, LegacyShop.Worker | obrigatório |
@@ -304,19 +322,19 @@ Web (MVC/Web API) · v4.7.2 → net10.0 · pasta `LegacyShop.Web`
   - A referência foi trocada automaticamente; a API do pacote novo é diferente e o código precisa ser revisado.
   - *Sugestão:* Veja Swashbuckle.
 - **[PKG-UNCHECKED] Compatibilidade não verificada: AutoMapper 6.2.2**
-  - Modo offline ou nuget.org indisponível: a versão original foi mantida.
+  - Modo offline ou feed NuGet indisponível: a versão original foi mantida.
   - *Sugestão:* A partir da v15 o AutoMapper exige licença comercial; a ferramenta mantém versões &lt; 15.
 - **[PKG-UNCHECKED] Compatibilidade não verificada: iTextSharp 5.5.13**
-  - Modo offline ou nuget.org indisponível: a versão original foi mantida.
+  - Modo offline ou feed NuGet indisponível: a versão original foi mantida.
   - *Sugestão:* Execute novamente sem --offline ou confira o build de verificação (NU1701 indica pacote só para .NET Framework).
 - **[PKG-UNCHECKED] Compatibilidade não verificada: log4net 2.0.8**
-  - Modo offline ou nuget.org indisponível: a versão original foi mantida.
+  - Modo offline ou feed NuGet indisponível: a versão original foi mantida.
   - *Sugestão:* log4net no .NET não lê a seção &lt;log4net&gt; do web.config/app.config: ela foi extraída para log4net.config. Configure com XmlConfigurator.Configure(new FileInfo("log4net.config")) ou use Microsoft.Extensions.Logging.Log4Net.AspNetCore.
 - **[PKG-UNCHECKED] Compatibilidade não verificada: Microsoft.AspNet.WebApi.Client 5.2.7**
-  - Modo offline ou nuget.org indisponível: a versão original foi mantida.
+  - Modo offline ou feed NuGet indisponível: a versão original foi mantida.
   - *Sugestão:* System.Net.Http.Formatting (ReadAsAsync/PostAsJsonAsync). Considere migrar para System.Net.Http.Json (ReadFromJsonAsync), nativo do .NET.
 - **[PKG-UNCHECKED] Compatibilidade não verificada: Newtonsoft.Json 12.0.2**
-  - Modo offline ou nuget.org indisponível: a versão original foi mantida.
+  - Modo offline ou feed NuGet indisponível: a versão original foi mantida.
   - *Sugestão:* Execute novamente sem --offline ou confira o build de verificação (NU1701 indica pacote só para .NET Framework).
 - **[PKG-UPDATED] Pacote atualizado: EntityFramework 6.2.0 → 6.5.1**
   - Versão alinhada ao .NET 10.
@@ -492,10 +510,10 @@ Biblioteca · v4.6.1 → net10.0 · pasta `LegacyShop.Core`
 ### Pontos de atenção (9)
 
 - **[PKG-UNCHECKED] Compatibilidade não verificada: Dapper 1.50.5**
-  - Modo offline ou nuget.org indisponível: a versão original foi mantida.
+  - Modo offline ou feed NuGet indisponível: a versão original foi mantida.
   - *Sugestão:* Execute novamente sem --offline ou confira o build de verificação (NU1701 indica pacote só para .NET Framework).
 - **[PKG-UNCHECKED] Compatibilidade não verificada: Newtonsoft.Json 12.0.2**
-  - Modo offline ou nuget.org indisponível: a versão original foi mantida.
+  - Modo offline ou feed NuGet indisponível: a versão original foi mantida.
   - *Sugestão:* Execute novamente sem --offline ou confira o build de verificação (NU1701 indica pacote só para .NET Framework).
 - **[PKG-UPDATED] Pacote atualizado: EntityFramework 6.2.0 → 6.5.1**
   - Versão alinhada ao .NET 10.
@@ -543,19 +561,19 @@ Windows Service · v4.6.1 → net10.0 · pasta `LegacyShop.Worker`
 ### Pontos de atenção (11)
 
 - **[PKG-UNCHECKED] Compatibilidade não verificada: log4net 2.0.8**
-  - Modo offline ou nuget.org indisponível: a versão original foi mantida.
+  - Modo offline ou feed NuGet indisponível: a versão original foi mantida.
   - *Sugestão:* log4net no .NET não lê a seção &lt;log4net&gt; do web.config/app.config: ela foi extraída para log4net.config. Configure com XmlConfigurator.Configure(new FileInfo("log4net.config")) ou use Microsoft.Extensions.Logging.Log4Net.AspNetCore.
 - **[PKG-UNCHECKED] Compatibilidade não verificada: Quartz 2.6.2**
-  - Modo offline ou nuget.org indisponível: a versão original foi mantida.
+  - Modo offline ou feed NuGet indisponível: a versão original foi mantida.
   - *Sugestão:* Quartz 2.x → 3.x tem API assíncrona (IJob.Execute retorna Task).
 - **[PKG-UNCHECKED] Compatibilidade não verificada: Common.Logging 3.4.1**
-  - Modo offline ou nuget.org indisponível: a versão original foi mantida.
+  - Modo offline ou feed NuGet indisponível: a versão original foi mantida.
   - *Sugestão:* Execute novamente sem --offline ou confira o build de verificação (NU1701 indica pacote só para .NET Framework).
 - **[PKG-UNCHECKED] Compatibilidade não verificada: Common.Logging.Core 3.4.1**
-  - Modo offline ou nuget.org indisponível: a versão original foi mantida.
+  - Modo offline ou feed NuGet indisponível: a versão original foi mantida.
   - *Sugestão:* Execute novamente sem --offline ou confira o build de verificação (NU1701 indica pacote só para .NET Framework).
 - **[PKG-UNCHECKED] Compatibilidade não verificada: Empresa.Integracao.Erp 1.4.0**
-  - Modo offline ou nuget.org indisponível: a versão original foi mantida.
+  - Modo offline ou feed NuGet indisponível: a versão original foi mantida.
   - *Sugestão:* Execute novamente sem --offline ou confira o build de verificação (NU1701 indica pacote só para .NET Framework).
 - **[LEGACY-INSTALLER] Instalador de Windows Service (ProjectInstaller) movido para _Legacy** — `ProjectInstaller.cs`
   - System.Configuration.Install (installutil) não existe no .NET 10.
@@ -623,10 +641,10 @@ Console · v4.5 → net10.0 · pasta `LegacyShop.Importador`
 ### Pontos de atenção (3)
 
 - **[PKG-UNCHECKED] Compatibilidade não verificada: CsvHelper 12.1.2**
-  - Modo offline ou nuget.org indisponível: a versão original foi mantida.
+  - Modo offline ou feed NuGet indisponível: a versão original foi mantida.
   - *Sugestão:* Execute novamente sem --offline ou confira o build de verificação (NU1701 indica pacote só para .NET Framework).
 - **[PKG-UNCHECKED] Compatibilidade não verificada: Microsoft.Exchange.WebServices 2.2**
-  - Modo offline ou nuget.org indisponível: a versão original foi mantida.
+  - Modo offline ou feed NuGet indisponível: a versão original foi mantida.
   - *Sugestão:* Execute novamente sem --offline ou confira o build de verificação (NU1701 indica pacote só para .NET Framework).
 - **[CFG-ENCRYPT] Encrypt=False adicionado às connection strings do SQL Server** — `App.config`
   - Microsoft.Data.SqlClient usa Encrypt=true por padrão; para preservar o comportamento anterior foi adicionado Encrypt=False em: DefaultConnection.

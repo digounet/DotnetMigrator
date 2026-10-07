@@ -1,6 +1,22 @@
-namespace Migrator.Core.Models;
+﻿namespace Migrator.Core.Models;
 
 public enum CloudTarget { None, Aws }
+
+/// <summary>What the output targets: a .NET 10 rewrite or the same code on the latest .NET Framework.</summary>
+public enum MigrationTarget { Net10, NetFramework }
+
+public enum IacTool { Terraform, CloudFormation }
+
+public static class TargetText
+{
+    /// <summary>Latest .NET Framework release; the only version still in mainstream support.</summary>
+    public const string FrameworkVersion = "v4.8.1";
+    public const string FrameworkMoniker = "net481";
+
+    public static string Display(this MigrationTarget target) => target == MigrationTarget.NetFramework ? ".NET Framework 4.8.1" : ".NET 10";
+    public static string Moniker(this MigrationTarget target) => target == MigrationTarget.NetFramework ? FrameworkVersion : "net10.0";
+    public static string Display(this IacTool tool) => tool == IacTool.CloudFormation ? "CloudFormation" : "Terraform";
+}
 
 /// <summary>Where a deployable project should run on AWS.</summary>
 public enum AwsHosting

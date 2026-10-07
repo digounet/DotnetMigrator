@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using System.Xml.Linq;
 using Migrator.Core.Analysis;
 using Migrator.Core.Cloud;
@@ -29,7 +29,7 @@ public sealed class MigrationEngine
 
         if (!options.DryRun)
         {
-            result.OutputDir = Path.GetFullPath(options.OutputDir ?? Path.Combine(parent, workspace.Name + ".net10"));
+            result.OutputDir = Path.GetFullPath(options.OutputDir ?? Path.Combine(parent, workspace.Name + (options.KeepsFramework ? ".net481" : ".net10")));
             PrepareOutputDirectory(result.OutputDir, workspace.RootDir, options.Force);
         }
         result.ReportDir = Path.GetFullPath(options.ReportDir ??
@@ -64,7 +64,7 @@ public sealed class MigrationEngine
         var (nugetConfig, nugetSource) = ResolveNuGetSource(options, workspace.RootDir, result);
         result.NuGetSource = nugetSource.ToString();
         using var nuget = new NuGetClient(options.Offline, nugetSource);
-        var context = new ProjectMigrationContext(workspace.RootDir, map, new PackagePlanner(nuget), UsesSystemDataSqlClient(projects), options.Cloud, workspace.Name, options.KeepSecrets);
+        var context = new ProjectMigrationContext(workspace.RootDir, map, new PackagePlanner(nuget), UsesSystemDataSqlClient(projects), options.Cloud, workspace.Name, options.KeepSecrets, options.Target);
 
         var migrated = new List<MigratedProject>();
         foreach (var project in projects)
@@ -98,6 +98,9 @@ public sealed class MigrationEngine
                     : "Confira a URL do service index (deve terminar em index.json), as credenciais do nuget.config e o acesso de rede (VPN/proxy); enquanto isso, confie no build de verificação (avisos NU1701)."
             });
 
+        progress?.Report("Consolidando bancos, tabelas e campos acessados...");
+        DataAccessAnalyzer.Resolve(migrated);
+
         progress?.Report("Alinhando versões de pacotes entre projetos...");
         var ordered = PackageAligner.TopologicalOrder(migrated);
         await PackageAligner.AlignAsync(ordered, nuget);
@@ -113,19 +116,30 @@ public sealed class MigrationEngine
 
         if (profiles != null && !options.DryRun && options.GenerateInfrastructure)
         {
-            progress?.Report("Gerando infraestrutura como código (Terraform) e pipeline...");
-            var files = InfrastructureGenerator.Generate(result, profiles);
+            var cloudFormation = options.EffectiveIac == IacTool.CloudFormation;
+            progress?.Report($"Gerando infraestrutura como código ({options.EffectiveIac.Display()}) e pipeline...");
+            var files = cloudFormation ? CloudFormationGenerator.Generate(result, profiles) : InfrastructureGenerator.Generate(result, profiles);
             var carrier = migrated.FirstOrDefault(m => m.Result.OutputProjectPath != null);
             if (files.Count > 0 && carrier != null)
             {
                 foreach (var (path, content) in files) carrier.Plan.Write(path, content);
-                result.GlobalItems.Add(new InventoryItem
-                {
-                    Project = "(solução)", Severity = InventorySeverity.Info, Category = InventoryCategory.ProjectFile, RuleId = "AWS-INFRA",
-                    Title = $"Infraestrutura como código gerada: {files.Count(f => f.Key.EndsWith(".tf", StringComparison.Ordinal))} arquivos Terraform + workflow de deploy",
-                    Description = "infra/terraform/ (VPC, ECS/ALB, tarefas agendadas, workers, Lambda, RDS, S3, ElastiCache, IAM, alarmes) e .github/workflows/deploy.yml, parametrizados por variáveis; infra/README.md traz a ordem de execução.",
-                    Suggestion = "Revise terraform.tfvars.example, configure o backend remoto e crie os segredos (_secrets/*/create-secrets.sh) antes do primeiro apply.", AutoMigrated = true, FilePath = "infra/README.md"
-                });
+                result.GlobalItems.Add(cloudFormation
+                    ? new InventoryItem
+                    {
+                        Project = "(solução)", Severity = InventorySeverity.Info, Category = InventoryCategory.ProjectFile, RuleId = "AWS-INFRA",
+                        Title = $"Infraestrutura como código gerada: {files.Count(f => f.Key.EndsWith(".yaml", StringComparison.Ordinal) && f.Key.StartsWith(CloudFormationGenerator.Dir, StringComparison.Ordinal))} stacks CloudFormation + pipeline de deploy",
+                        Description = options.KeepsFramework
+                            ? "infra/cloudformation/ (VPC, EC2 Windows em Auto Scaling, ALB, RDS, S3/FSx, IAM, CodeDeploy, alarmes), infra/codedeploy/ (appspec + scripts PowerShell por projeto) e .github/workflows/deploy.yml (MSBuild em runner Windows); infra/README.md traz a ordem de execução."
+                            : "infra/cloudformation/ (VPC, ECS/ALB, tarefas agendadas, workers, Lambda, RDS, S3, IAM, alarmes) e .github/workflows/deploy.yml; infra/README.md traz a ordem de execução.",
+                        Suggestion = "Revise parameters.example.json e rode infra/cloudformation/deploy.sh (ou deploy.ps1) na ordem indicada; crie os segredos no Secrets Manager antes do primeiro deploy.", AutoMigrated = true, FilePath = "infra/README.md"
+                    }
+                    : new InventoryItem
+                    {
+                        Project = "(solução)", Severity = InventorySeverity.Info, Category = InventoryCategory.ProjectFile, RuleId = "AWS-INFRA",
+                        Title = $"Infraestrutura como código gerada: {files.Count(f => f.Key.EndsWith(".tf", StringComparison.Ordinal))} arquivos Terraform + workflow de deploy",
+                        Description = "infra/terraform/ (VPC, ECS/ALB, tarefas agendadas, workers, Lambda, RDS, S3, ElastiCache, IAM, alarmes) e .github/workflows/deploy.yml, parametrizados por variáveis; infra/README.md traz a ordem de execução.",
+                        Suggestion = "Revise terraform.tfvars.example, configure o backend remoto e crie os segredos (_secrets/*/create-secrets.sh) antes do primeiro apply.", AutoMigrated = true, FilePath = "infra/README.md"
+                    });
             }
         }
 
@@ -139,9 +153,21 @@ public sealed class MigrationEngine
             await File.WriteAllTextAsync(Path.Combine(result.OutputDir!, WorkspaceLoader.OutputMarkerFile),
                 $"Gerado pelo Migrator em {DateTime.Now:O} a partir de {workspace.RootDir}{Environment.NewLine}", cancellationToken);
 
-            if (llm != null) await new LlmCodeDrafter(llm, options.Llm, result.OutputDir!).DraftAsync(result, progress, cancellationToken);
+            if (llm != null && !options.KeepsFramework) await new LlmCodeDrafter(llm, options.Llm, result.OutputDir!).DraftAsync(result, progress, cancellationToken);
 
-            if (options.VerifyBuild && ordered.Count > 0 && !await FeedReachableAsync(nugetSource, result, progress, cancellationToken))
+            if (options.VerifyBuild && options.KeepsFramework)
+            {
+                // Old-style projects with packages.config need MSBuild + nuget restore on Windows; 'dotnet build' cannot verify them.
+                result.BuildSkippedReason = "destino .NET Framework (compile com MSBuild/Visual Studio)";
+                result.GlobalItems.Add(new InventoryItem
+                {
+                    Project = "(solução)", Severity = InventorySeverity.Info, Category = InventoryCategory.Build, RuleId = "BUILD-FX-SKIPPED",
+                    Title = "Build de verificação não executado: projetos .NET Framework",
+                    Description = "O código não foi alterado; a atualização para 4.8.1 é compatível em binário e exige MSBuild (Windows) para compilar.",
+                    Suggestion = "Abra a saída no Visual Studio ou rode 'nuget restore' + 'msbuild /p:Configuration=Release' (o workflow gerado faz isso em um runner Windows)."
+                });
+            }
+            else if (options.VerifyBuild && ordered.Count > 0 && !await FeedReachableAsync(nugetSource, result, progress, cancellationToken))
             {
                 // Nothing restores without the feed: skipping is faster and clearer than a 30-minute cascade of timeouts.
             }
@@ -307,11 +333,11 @@ public sealed class MigrationEngine
         {
             var closure = PackageAligner.Closure(project, ordered).ToList();
             var merged = project.Profile.MergeWith(closure.Select(c => c.Profile));
-            var hosting = AwsArchitect.Recommend(project.Result.Project, merged);
+            var hosting = AwsArchitect.Recommend(project.Result.Project, merged, result.Options.Target);
             project.Result.Hosting = hosting;
             profiles.Add((project.Result, merged));
 
-            if (hosting.Primary is AwsHosting.NotDeployable or AwsHosting.Desktop || project.Result.OutputProjectPath == null) continue;
+            if (hosting.Primary is AwsHosting.NotDeployable or AwsHosting.Desktop || project.Result.OutputProjectPath == null || result.Options.KeepsFramework) continue;
             if (hosting.Primary == AwsHosting.Lambda)
             {
                 if (project.Spec != null)
@@ -490,6 +516,9 @@ public sealed class MigrationEngine
     {
         var name = Path.GetFileName(relativePath);
         if (name is "Dockerfile" or ".dockerignore" or ".gitignore" or ".editorconfig") return false;
+        var unix = relativePath.Replace('\\', '/');
+        if (unix.StartsWith("infra/", StringComparison.Ordinal) || unix.StartsWith(".github/", StringComparison.Ordinal)) return false; // YAML/JSON/scripts consumed by the AWS CLI and PowerShell
+
         return Path.GetExtension(name).ToLowerInvariant() switch
         {
             ".sh" or ".ps1" or ".tf" or ".tfvars" or ".example" or ".yml" or ".yaml" or ".md" or ".txt" or ".env" => false,
@@ -504,6 +533,13 @@ public sealed class MigrationEngine
                 .Where(p => p.OutputProjectPath != null)
                 .OrderBy(p => p.OutputProjectPath, StringComparer.OrdinalIgnoreCase)
                 .Select(p => new XElement("Project", new XAttribute("Path", p.OutputProjectPath!.Replace('\\', '/')))));
+        if (result.Options.KeepsFramework && workspace.SolutionFile != null && workspace.SolutionFile.EndsWith(".sln", StringComparison.OrdinalIgnoreCase))
+        {
+            // Old-style projects stay old-style: the original .sln (same relative paths) is the natural solution file.
+            var copy = Path.Combine(result.OutputDir!, Path.GetFileName(workspace.SolutionFile));
+            File.Copy(workspace.SolutionFile, copy, overwrite: true);
+            return copy;
+        }
         var path = Path.Combine(result.OutputDir!, workspace.Name + ".slnx");
         File.WriteAllText(path, solution + Environment.NewLine);
         return path;

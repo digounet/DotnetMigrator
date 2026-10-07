@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using Migrator.Core.Models;
 
 namespace Migrator.Core.Reporting;
@@ -10,6 +10,7 @@ public static class ReportWriter
     public const string CsvFile = "inventory.csv";
     public const string ExcelFile = "inventory.xlsx";
     public const string ModernizationCsvFile = "modernization.csv";
+    public const string DataAccessCsvFile = "data-access.csv";
 
     public static async Task WriteAllAsync(SolutionResult result, string directory)
     {
@@ -20,6 +21,8 @@ public static class ReportWriter
         await File.WriteAllTextAsync(Path.Combine(directory, CsvFile), CsvReport.Render(result), utf8Bom);
         if (result.AllModernizations.Any())
             await File.WriteAllTextAsync(Path.Combine(directory, ModernizationCsvFile), CsvReport.RenderModernization(result), utf8Bom);
+        if (result.AllDataAccess.Any())
+            await File.WriteAllTextAsync(Path.Combine(directory, DataAccessCsvFile), CsvReport.RenderDataAccess(result), utf8Bom);
         await File.WriteAllTextAsync(Path.Combine(directory, JsonReport.FileName), JsonReport.Render(result), utf8Bom);
         ExcelReport.Write(result, Path.Combine(directory, ExcelFile));
     }
@@ -66,5 +69,26 @@ public static class ReportWriter
     }
 
     public static string ModeLabel(SolutionResult result) =>
-        result.Options.DryRun ? "Análise (nenhum arquivo alterado)" : "Migração";
+        result.Options.DryRun ? "Análise (nenhum arquivo alterado)" : result.Options.KeepsFramework ? "Atualização de framework (código não alterado)" : "Migração";
+
+    /// <summary>Report title: what the run produces.</summary>
+    public static string Title(SolutionResult result) =>
+        result.Options.KeepsFramework ? "Atualização para .NET Framework 4.8.1 + infraestrutura AWS" : "Migração .NET Framework → .NET 10";
+
+    /// <summary>Target moniker shown next to each project ("net10.0" or "v4.8.1").</summary>
+    public static string TargetMoniker(SolutionResult result) => result.Options.Target.Moniker();
+
+    /// <summary>Tables grouped by database for the "Dados acessados" section, with the projects that touch each one merged.</summary>
+    internal static List<(string Database, string Technology, List<TableAccess> Tables)> DataAccessByDatabase(SolutionResult result) =>
+        result.AllDataAccess
+            .GroupBy(t => (t.Database, t.Technology))
+            .OrderBy(g => g.Key.Database.StartsWith("não identificado", StringComparison.Ordinal) ? 1 : 0)
+            .ThenBy(g => g.Key.Database, StringComparer.OrdinalIgnoreCase)
+            .Select(g => (g.Key.Database, g.Key.Technology, g.GroupBy(t => (t.Kind, Name: t.QualifiedName), (k, items) =>
+                {
+                    var merged = new TableAccess { Project = string.Join(", ", items.Select(i => i.Project).Distinct().OrderBy(p => p, StringComparer.OrdinalIgnoreCase)), Name = items.First().Name, Kind = k.Kind, Schema = items.First().Schema, Database = g.Key.Database, Technology = g.Key.Technology };
+                    foreach (var i in items) merged.MergeFrom(i);
+                    return merged;
+                }).OrderBy(t => t.Kind).ThenBy(t => t.QualifiedName, StringComparer.OrdinalIgnoreCase).ToList()))
+            .ToList();
 }

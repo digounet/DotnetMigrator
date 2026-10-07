@@ -1,4 +1,4 @@
-using Migrator.Core.Migration;
+﻿using Migrator.Core.Migration;
 using Migrator.Core.Models;
 
 namespace Migrator.Tests;
@@ -43,8 +43,27 @@ public sealed class SampleSolutionTests : IDisposable
         Assert.Contains(worker.Inventory, i => i.RuleId == "NET002");
         Assert.Contains(worker.Inventory, i => i.RuleId == "CS-ENCODING");
 
-        foreach (var file in new[] { "migration-report.html", "migration-report.md", "inventory.csv", "inventory.xlsx", "modernization.csv" })
+        foreach (var file in new[] { "migration-report.html", "migration-report.md", "inventory.csv", "inventory.xlsx", "modernization.csv", "data-access.csv" })
             Assert.True(File.Exists(Path.Combine(reportDir, file)), file);
+
+        // Data access inventory: database, engine, tables and columns per project (always, whatever the target)
+        var core = result.Projects[1];
+        var produto = Assert.Single(core.DataAccess, t => t.Name == "Produto");
+        Assert.Equal("LegacyShop", produto.Database);                                   // Core has no own connection string: resolved from the hosts (Web/Importador) by name
+        Assert.Equal("SQL Server", produto.Technology);
+        Assert.Equal(["Categoria", "Descricao", "Destaque", "Id", "Nome", "Preco"], produto.Columns);
+        Assert.Contains("Dapper", produto.Access);
+        Assert.Contains("EF6", produto.Access);
+        Assert.Contains("arquivo .sql", produto.Access);
+        Assert.Contains("DELETE", produto.Operations);
+        Assert.Contains("EF (escrita)", produto.Operations);
+        var pedido = Assert.Single(result.Projects[4].DataAccess);
+        Assert.Equal(("PedidoImportado", "LegacyShop"), (pedido.Name, pedido.Database));
+        Assert.Equal(["Cliente", "Data", "Numero", "Valor"], pedido.Columns);
+        var vendas = Assert.Single(result.Projects[5].DataAccess);                       // VB: SELECT * + reader columns, connection "Relatorios"
+        Assert.Equal(("Vendas", "Relatorios"), (vendas.Name, vendas.Database));
+        Assert.Equal(["*", "Mes", "Produto", "Valor"], vendas.Columns);
+        Assert.Contains("3 tabela(s) acessadas", result.Architecture!.Components.Single(c => c.Id == "rds-sqlserver").Role);
 
         // Modernization advice and AWS architecture
         Assert.Contains(web.Modernizations, m => m.RuleId == "MOD-PKG-AUTOMAPPER" && m.Kind == ModernizationKind.License);

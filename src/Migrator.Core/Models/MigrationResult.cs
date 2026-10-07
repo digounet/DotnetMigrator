@@ -1,4 +1,4 @@
-using Migrator.Core.Analysis;
+﻿using Migrator.Core.Analysis;
 using Migrator.Core.Migration;
 
 namespace Migrator.Core.Models;
@@ -15,6 +15,15 @@ public sealed record MigrationOptions
     public TimeSpan BuildTimeout { get; init; } = TimeSpan.FromMinutes(30);
     /// <summary>Cloud provider for the architecture proposal and container artifacts. None disables the advisor.</summary>
     public CloudTarget Cloud { get; init; } = CloudTarget.Aws;
+    /// <summary>
+    /// Net10 (default) rewrites the code for .NET 10. NetFramework keeps the code untouched, only raises every project to
+    /// .NET Framework 4.8.1 (lift-and-shift: EC2 Windows + CloudFormation); analysis, data-access inventory and architecture still run.
+    /// </summary>
+    public MigrationTarget Target { get; init; } = MigrationTarget.Net10;
+    /// <summary>Infrastructure-as-code flavour. Null = Terraform for .NET 10, CloudFormation for the .NET Framework target.</summary>
+    public IacTool? Iac { get; init; }
+    public IacTool EffectiveIac => Iac ?? (Target == MigrationTarget.NetFramework ? IacTool.CloudFormation : IacTool.Terraform);
+    public bool KeepsFramework => Target == MigrationTarget.NetFramework;
     /// <summary>nuget.config of the private feed (Artifactory/Nexus...). Copied to the output root and used for compatibility lookups and the verification build. Falls back to MIGRATOR_NUGET_CONFIG, then the source root's nuget.config.</summary>
     public string? NuGetConfigPath { get; init; }
     /// <summary>Explicit v3 service index URL for compatibility lookups (overrides the nuget.config); a minimal nuget.config is generated from it when none exists.</summary>
@@ -41,6 +50,10 @@ public sealed class ProjectResult
     public List<InventoryItem> Inventory { get; } = [];
     public List<ModernizationItem> Modernizations { get; } = [];
     public HostingRecommendation? Hosting { get; set; }
+    /// <summary>Tables, views and stored procedures the project's code touches (ADO.NET, Dapper, EF, EDMX, .sql files).</summary>
+    public List<TableAccess> DataAccess { get; } = [];
+    /// <summary>Raw data-access findings, resolved solution-wide by DataAccessAnalyzer.Resolve into <see cref="DataAccess"/>.</summary>
+    internal DataAccessScan? DataScan { get; set; }
     public ProjectBuildStatus? Build { get; set; }
     /// <summary>Credentials moved out of this project's appsettings (null when none or when --keep-secrets).</summary>
     public SecretsPlan? Secrets { get; set; }
@@ -100,5 +113,6 @@ public sealed class SolutionResult
     public int LlmTriagedItems { get; set; }
 
     public IEnumerable<InventoryItem> AllItems => GlobalItems.Concat(Projects.SelectMany(p => p.Inventory));
+    public IEnumerable<TableAccess> AllDataAccess => Projects.SelectMany(p => p.DataAccess);
     public IEnumerable<ModernizationItem> AllModernizations => GlobalModernizations.Concat(Projects.SelectMany(p => p.Modernizations));
 }

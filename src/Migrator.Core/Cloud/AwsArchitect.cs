@@ -1,12 +1,14 @@
-using System.Text;
+﻿using System.Text;
 using Migrator.Core.Analysis;
 using Migrator.Core.Models;
 
 namespace Migrator.Core.Cloud;
 
 /// <summary>Turns application profiles into a hosting recommendation per project and a target architecture for the solution.</summary>
-public static class AwsArchitect
+public static partial class AwsArchitect
 {
+    private delegate AwsComponent ComponentFactory(string id, string service, string role, string replaces, string why, bool required = true, string? notes = null);
+
     /// <summary>Culture assumed for TZ/LANG in generated Dockerfiles when the application does not declare one.</summary>
     public const string DefaultCulture = "pt-BR";
 
@@ -193,6 +195,7 @@ public static class AwsArchitect
 
     public static ArchitectureProposal Propose(SolutionResult result, IReadOnlyList<(ProjectResult Result, ApplicationProfile Profile)> projects)
     {
+        if (result.Options.KeepsFramework) return ProposeLiftAndShift(result, projects);
         var proposal = new ArchitectureProposal();
         var components = new Dictionary<string, AwsComponent>(StringComparer.Ordinal);
         AwsComponent Component(string id, string service, string role, string replaces, string why, bool required = true, string? notes = null)
@@ -257,25 +260,7 @@ public static class AwsArchitect
         }
 
         // Data
-        var allDatabases = projects.SelectMany(p => p.Profile.Databases).DistinctBy(d => $"{d.Provider}|{d.Server}|{d.Database}").ToList();
-        foreach (var provider in allDatabases.Select(d => d.Provider).Distinct())
-        {
-            var dbs = allDatabases.Where(d => d.Provider == provider).ToList();
-            var names = string.Join(", ", dbs.Select(d => d.Database ?? d.Name).Distinct().Take(6));
-            var servers = string.Join(", ", dbs.Select(d => d.Server).Where(s => s != null).Distinct().Take(4));
-            var (id, service, why, notes) = provider switch
-            {
-                "SQL Server" => ("rds-sqlserver", "Amazon RDS for SQL Server", "Mesmo engine, backups automáticos, Multi-AZ e patching gerenciado; restore nativo a partir de .bak no S3 para migrar os dados.",
-                    "Licença inclusa (Standard/Enterprise/Web/Express). Integrated Security exige AWS Managed Microsoft AD; prefira autenticação SQL + Secrets Manager. Para reduzir licenciamento a longo prazo: Aurora PostgreSQL com Babelfish."),
-                "Oracle" => ("rds-oracle", "Amazon RDS for Oracle", "Engine Oracle gerenciado (BYOL ou licença inclusa para SE2).", "Avalie Aurora PostgreSQL com AWS SCT/DMS para sair do licenciamento Oracle."),
-                "MySQL" => ("rds-mysql", "Amazon Aurora MySQL / RDS for MySQL", "Compatível com o driver atual; Aurora traz réplicas e failover rápido.", null),
-                "PostgreSQL" => ("rds-postgres", "Amazon Aurora PostgreSQL / RDS for PostgreSQL", "Compatível com Npgsql; Aurora Serverless v2 para cargas variáveis.", null),
-                "SQLite" => ("sqlite", "Arquivo SQLite (EFS) ou Amazon RDS", "SQLite em disco efêmero se perde; use EFS para persistir ou migre para RDS.", null),
-                _ => ("rds-other", "Amazon RDS", "Banco acessado via OLE DB/ODBC: identifique o engine real.", "Access/Excel via OLE DB não têm equivalente gerenciado: migre para RDS ou S3.")
-            };
-            var c = Component(id, service, $"Banco de dados ({names})", servers.Length > 0 ? $"{provider} em {servers}" : provider, why, notes: notes);
-            foreach (var db in dbs) c.UsedBy.Add(db.Project);
-        }
+        AddDatabaseComponents(Component, projects, result);
         if (projects.Any(p => p.Profile.Has(Signal.MongoDb))) Component("documentdb", "Amazon DocumentDB", "Banco de documentos", "MongoDB", "Compatível com o driver MongoDB.", required: false);
         if (projects.Any(p => p.Profile.Has(Signal.Elasticsearch))) Component("opensearch", "Amazon OpenSearch Service", "Busca/indexação", "Elasticsearch", "Fork gerenciado do Elasticsearch.", required: false);
 
@@ -423,6 +408,34 @@ public static class AwsArchitect
         BuildCostNotes(proposal, deployables, components);
         proposal.Diagram = Mermaid(result, deployables, components);
         return proposal;
+    }
+
+    /// <summary>One RDS component per engine, with the tables the code touches (from the data-access inventory) in the role text.</summary>
+    private static void AddDatabaseComponents(ComponentFactory Component, IReadOnlyList<(ProjectResult Result, ApplicationProfile Profile)> projects, SolutionResult result)
+    {
+        var allDatabases = projects.SelectMany(p => p.Profile.Databases).DistinctBy(d => $"{d.Provider}|{d.Server}|{d.Database}").ToList();
+        foreach (var provider in allDatabases.Select(d => d.Provider).Distinct())
+        {
+            var dbs = allDatabases.Where(d => d.Provider == provider).ToList();
+            var names = string.Join(", ", dbs.Select(d => d.Database ?? d.Name).Distinct().Take(6));
+            var servers = string.Join(", ", dbs.Select(d => d.Server).Where(s => s != null).Distinct().Take(4));
+            var (id, service, why, notes) = provider switch
+            {
+                "SQL Server" => ("rds-sqlserver", "Amazon RDS for SQL Server", "Mesmo engine, backups automáticos, Multi-AZ e patching gerenciado; restore nativo a partir de .bak no S3 para migrar os dados.",
+                    "Licença inclusa (Standard/Enterprise/Web/Express). Integrated Security exige AWS Managed Microsoft AD; prefira autenticação SQL + Secrets Manager. Para reduzir licenciamento a longo prazo: Aurora PostgreSQL com Babelfish."),
+                "Oracle" => ("rds-oracle", "Amazon RDS for Oracle", "Engine Oracle gerenciado (BYOL ou licença inclusa para SE2).", "Avalie Aurora PostgreSQL com AWS SCT/DMS para sair do licenciamento Oracle."),
+                "MySQL" => ("rds-mysql", "Amazon Aurora MySQL / RDS for MySQL", "Compatível com o driver atual; Aurora traz réplicas e failover rápido.", null),
+                "PostgreSQL" => ("rds-postgres", "Amazon Aurora PostgreSQL / RDS for PostgreSQL", "Compatível com Npgsql; Aurora Serverless v2 para cargas variáveis.", null),
+                "SQLite" => ("sqlite", "Arquivo SQLite (EFS) ou Amazon RDS", "SQLite em disco efêmero se perde; use EFS para persistir ou migre para RDS.", null),
+                _ => ("rds-other", "Amazon RDS", "Banco acessado via OLE DB/ODBC: identifique o engine real.", "Access/Excel via OLE DB não têm equivalente gerenciado: migre para RDS ou S3.")
+            };
+            var tables = result.AllDataAccess.Where(t => t.Technology == provider && t.Kind == DataObjectKind.Table).Select(t => t.QualifiedName).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var role = tables.Count > 0
+                ? $"Banco de dados ({names}); {tables.Count} tabela(s) acessadas: {string.Join(", ", tables.Take(8))}{(tables.Count > 8 ? ", ..." : "")} — detalhes na seção 'Dados acessados'"
+                : $"Banco de dados ({names})";
+            var c = Component(id, service, role, servers.Length > 0 ? $"{provider} em {servers}" : provider, why, notes: notes);
+            foreach (var db in dbs) c.UsedBy.Add(db.Project);
+        }
     }
 
     private static int Order(string id) => id switch

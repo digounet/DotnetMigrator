@@ -1,4 +1,4 @@
-using ClosedXML.Excel;
+﻿using ClosedXML.Excel;
 using Migrator.Core.Models;
 
 namespace Migrator.Core.Reporting;
@@ -13,13 +13,14 @@ public static partial class ExcelReport
         WriteSummary(workbook.Worksheets.Add("Resumo"), result);
         WriteInventory(workbook.Worksheets.Add("Inventário"), result);
         if (result.AllModernizations.Any()) WriteModernization(workbook.Worksheets.Add("Modernização"), result);
+        if (result.AllDataAccess.Any()) WriteDataAccess(workbook.Worksheets.Add("Dados acessados"), result);
         if (result.Architecture != null) WriteArchitecture(workbook.Worksheets.Add("Arquitetura AWS"), result);
         workbook.SaveAs(path);
     }
 
     private static void WriteSummary(IXLWorksheet sheet, SolutionResult result)
     {
-        sheet.Cell(1, 1).Value = $"Migração .NET Framework → .NET 10 — {result.SolutionName}";
+        sheet.Cell(1, 1).Value = $"{ReportWriter.Title(result)} — {result.SolutionName}";
         sheet.Cell(1, 1).Style.Font.Bold = true;
         sheet.Cell(1, 1).Style.Font.FontSize = 14;
 
@@ -27,6 +28,7 @@ public static partial class ExcelReport
         {
             ("Origem", result.RootDir),
             ("Modo", ReportWriter.ModeLabel(result)),
+            ("Destino", result.Options.Target.Display()),
             ("Saída", result.OutputDir ?? "—"),
             ("Data", result.FinishedAt.ToString("dd/MM/yyyy HH:mm")),
             ("Compatibilidade NuGet verificada", result.NuGetChecked ? "Sim (nuget.org)" : "Não"),

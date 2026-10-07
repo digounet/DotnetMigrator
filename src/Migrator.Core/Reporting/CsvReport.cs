@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using Migrator.Core.Models;
 
 namespace Migrator.Core.Reporting;
@@ -35,6 +35,18 @@ public static class CsvReport
             sb.AppendLine(string.Join(",",
                 Field(item.Project), Field(item.Kind.Display()), Field(item.Impact.Display()), Field(item.Effort.Display()), Field(item.RuleId),
                 Field(item.Title), Field(item.Why), Field(item.Proposal), Field(item.Evidence ?? ""), Field(item.Occurrences.ToString()), Field(item.AwsService ?? "")));
+        return sb.ToString();
+    }
+
+    public static string RenderDataAccess(SolutionResult result)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Banco,Tecnologia,Tipo,Schema,Tabela,Campos,Operacoes,Acesso,Projetos,Onde,BancoIdentificado");
+        foreach (var (database, technology, tables) in ReportWriter.DataAccessByDatabase(result))
+            foreach (var t in tables)
+                sb.AppendLine(string.Join(",",
+                    Field(database), Field(technology), Field(t.Kind.Display()), Field(t.Schema ?? ""), Field(t.Name), Field(string.Join("; ", t.Columns)), Field(string.Join("; ", t.Operations)),
+                    Field(string.Join("; ", t.Access)), Field(t.Project), Field(string.Join("; ", t.Locations)), Field(database.StartsWith("não identificado", StringComparison.Ordinal) ? "Não" : "Sim")));
         return sb.ToString();
     }
 

@@ -1,4 +1,4 @@
-using Migrator.Core.Migration;
+﻿using Migrator.Core.Migration;
 using Migrator.Core.Models;
 using Migrator.Core.Reporting;
 using Spectre.Console;
@@ -65,7 +65,7 @@ public static class RunCommand
     private static void PrintSummary(SolutionResult result)
     {
         AnsiConsole.WriteLine();
-        var table = new Table().RoundedBorder().Title($"[bold]{Markup.Escape(result.SolutionName)}[/] — {Markup.Escape(ReportWriter.ModeLabel(result))}");
+        var table = new Table().RoundedBorder().Title($"[bold]{Markup.Escape(result.SolutionName)}[/] — {Markup.Escape(ReportWriter.ModeLabel(result))} · destino {Markup.Escape(result.Options.Target.Display())}");
         table.AddColumn("Projeto");
         table.AddColumn("Tipo");
         table.AddColumn("Origem");
@@ -115,6 +115,13 @@ public static class RunCommand
                 var high = mods.Count(m => m.Impact == Impact.High);
                 AnsiConsole.MarkupLine($"Modernização: [purple]{mods.Count} sugestões[/] ({Markup.Escape(string.Join(", ", byKind))}); [red]{high}[/] de impacto alto.");
             }
+        }
+
+        var tables = result.AllDataAccess.ToList();
+        if (tables.Count > 0)
+        {
+            var databases = tables.Select(t => t.Database).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            AnsiConsole.MarkupLine($"Dados acessados: [cyan]{tables.Count(t => t.Kind == DataObjectKind.Table)} tabela(s), {tables.Count(t => t.Kind != DataObjectKind.Table)} procedure(s)[/] em {databases.Count} banco(s): {Markup.Escape(string.Join(", ", databases.Take(5)))} (detalhes no relatório).");
         }
 
         var global = result.GlobalItems.Where(i => i.RequiresAction).ToList();

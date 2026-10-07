@@ -1,4 +1,4 @@
-using System.Text.Json.Serialization;
+﻿using System.Text.Json.Serialization;
 using Migrator.Core.Llm;
 using Migrator.Core.Models;
 
@@ -10,6 +10,8 @@ public sealed record PortfolioOptions
     public string? ReportDir { get; init; }
     public bool Offline { get; init; }
     public CloudTarget Cloud { get; init; } = CloudTarget.Aws;
+    /// <summary>Net10 (default) or NetFramework: changes the hosting recommendation of every app (EC2 Windows lift-and-shift).</summary>
+    public MigrationTarget Target { get; init; } = MigrationTarget.Net10;
     public LlmOptions Llm { get; init; } = new();
     public string? NuGetConfigPath { get; init; }
     public string? NuGetSourceUrl { get; init; }

@@ -1,4 +1,4 @@
-using System.Text.Encodings.Web;
+﻿using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Migrator.Core.Analysis;
@@ -31,6 +31,8 @@ public static class JsonReport
         NuGetChecked: result.NuGetChecked,
         BuildSucceeded: result.BuildSucceeded,
         Cloud: result.Options.Cloud,
+        Target: result.Options.Target,
+        Iac: result.Options.DryRun || !result.Options.GenerateInfrastructure ? null : result.Options.EffectiveIac,
         LlmModel: result.LlmModel,
         LlmCalls: result.LlmCalls,
         Totals: new TotalsDto(
@@ -48,11 +50,13 @@ public static class JsonReport
             p.DockerBuildSucceeded,
             p.Hosting == null ? null : new HostingDto(p.Hosting.Primary, p.Hosting.Primary.Display(), p.Hosting.RequiresWindows, p.Hosting.HardWindowsDependencies, p.Hosting.SoftWindowsDependencies, p.Hosting.Rationale, p.Hosting.Prerequisites, p.Hosting.Alternatives, p.Hosting.DockerfileGenerated),
             p.Inventory.Select(Item).ToList(),
-            p.Modernizations.Select(Modernization).ToList())).ToList(),
+            p.Modernizations.Select(Modernization).ToList(),
+            p.DataAccess.Select(DataAccess).ToList())).ToList(),
         GlobalItems: result.GlobalItems.Select(Item).ToList(),
         GlobalModernizations: result.GlobalModernizations.Select(Modernization).ToList(),
         Databases: result.Databases.Select(d => new DatabaseDto(d.Provider, d.Server, d.Database, d.IntegratedSecurity, d.Name, d.Project)).ToList(),
         InternalHosts: result.InternalHosts.ToList(),
+        DataAccess: result.AllDataAccess.Select(DataAccess).ToList(),
         Architecture: result.Architecture == null ? null : new ArchitectureDto(
             result.Architecture.Summary, result.Architecture.ExecutiveSummary, result.Architecture.ExecutiveSummaryModel,
             result.Architecture.Components.Select(c => new ComponentDto(c.Id, c.Service, c.Role, c.Replaces, c.Why, c.Required, c.UsedBy.ToList(), c.Notes)).ToList(),
@@ -60,19 +64,21 @@ public static class JsonReport
 
     private static ItemDto Item(InventoryItem i) => new(i.Project, i.RuleId, i.Severity, i.Category, i.AutoMigrated, i.RequiresAction, i.Title, i.Description, i.Suggestion, i.FilePath, i.Line, i.Occurrences);
 
+    private static DataAccessDto DataAccess(TableAccess t) => new(t.Project, t.Database, t.DatabaseResolved, t.Technology, t.Kind, t.Schema, t.Name, t.Columns.ToList(), t.Operations.ToList(), t.Access.ToList(), t.Locations, t.ConnectionNames.ToList());
+
     private static ModernizationDto Modernization(ModernizationItem m) => new(m.Project, m.RuleId, m.Kind, m.Impact, m.Effort, m.Title, m.Why, m.Proposal, m.Evidence, m.Occurrences, m.AwsService);
 
     // ----------------------------------------------------------------------------- DTOs
 
     public sealed record MigrationResultDto(string Solution, string RootDir, string? OutputDir, string Mode, DateTime GeneratedAt, bool NuGetChecked, bool? BuildSucceeded,
-        CloudTarget Cloud, string? LlmModel, int LlmCalls, TotalsDto Totals, List<ProjectDto> Projects, List<ItemDto> GlobalItems, List<ModernizationDto> GlobalModernizations,
-        List<DatabaseDto> Databases, List<string> InternalHosts, ArchitectureDto? Architecture);
+        CloudTarget Cloud, MigrationTarget Target, IacTool? Iac, string? LlmModel, int LlmCalls, TotalsDto Totals, List<ProjectDto> Projects, List<ItemDto> GlobalItems, List<ModernizationDto> GlobalModernizations,
+        List<DatabaseDto> Databases, List<string> InternalHosts, List<DataAccessDto> DataAccess, ArchitectureDto? Architecture);
 
     public sealed record TotalsDto(int Breaking, int Warnings, int Automatic, int Modernizations, int HighImpactModernizations);
 
     public sealed record ProjectDto(string Name, ProjectKind Kind, string Language, string SourceTargetFramework, string RelativeDir, string? OutputProjectPath,
         int Breaking, int Warnings, int Automatic, int Informational, int AutomationPercent, BuildDto? Build, TestsDto? Tests, SmokeDto? Smoke, bool? DockerBuildSucceeded,
-        HostingDto? Hosting, List<ItemDto> Inventory, List<ModernizationDto> Modernizations);
+        HostingDto? Hosting, List<ItemDto> Inventory, List<ModernizationDto> Modernizations, List<DataAccessDto> DataAccess);
 
     public sealed record BuildDto(int Errors, int Warnings, string? BlockedBy, bool Succeeded);
     public sealed record TestsDto(int Passed, int Failed, int Skipped, bool Succeeded, IReadOnlyList<string> FailedTests);
@@ -83,6 +89,8 @@ public static class JsonReport
         string Title, string Description, string Suggestion, string? FilePath, int? Line, int Occurrences);
     public sealed record ModernizationDto(string Project, string RuleId, ModernizationKind Kind, Impact Impact, Effort Effort, string Title, string Why, string Proposal,
         string? Evidence, int Occurrences, string? AwsService);
+    public sealed record DataAccessDto(string Project, string Database, bool DatabaseResolved, string Technology, DataObjectKind Kind, string? Schema, string Name,
+        List<string> Columns, List<string> Operations, List<string> Access, List<string> Locations, List<string> ConnectionNames);
     public sealed record DatabaseDto(string Provider, string? Server, string? Database, bool IntegratedSecurity, string Name, string Project);
     public sealed record ComponentDto(string Id, string Service, string Role, string Replaces, string Why, bool Required, List<string> UsedBy, string? Notes);
     public sealed record ArchitectureDto(string Summary, string? ExecutiveSummary, string? ExecutiveSummaryModel, List<ComponentDto> Components, List<string> Phases,

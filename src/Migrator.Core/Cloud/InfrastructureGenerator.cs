@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using System.Text.RegularExpressions;
 using Migrator.Core.Analysis;
 using Migrator.Core.Migration;
@@ -1287,6 +1287,11 @@ public static partial class InfrastructureGenerator
     }
 
     // ------------------------------------------------------------------ CI/CD
+
+    /// <summary>Shared with the CloudFormation generator: the ECS/Lambda deploy workflow only depends on names, not on the IaC tool.</summary>
+    internal static string Workflow(string app, List<(ProjectResult Result, ApplicationProfile Profile)> containers, List<(ProjectResult Result, ApplicationProfile Profile)> lambdas, SolutionResult result) =>
+        Workflow(app, containers.Select(c => new Deployable(c.Result, c.Profile, Slug(c.Result.Project.Name), Id(c.Result.Project.Name))).ToList(),
+            lambdas.Select(l => new Deployable(l.Result, l.Profile, Slug(l.Result.Project.Name), Id(l.Result.Project.Name))).ToList(), result);
 
     private static string Workflow(string app, List<Deployable> containers, List<Deployable> lambdas, SolutionResult result)
     {

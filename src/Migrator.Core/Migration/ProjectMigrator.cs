@@ -1,4 +1,4 @@
-using System.Text.RegularExpressions;
+﻿using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Migrator.Core.Analysis;
 using Migrator.Core.Cloud;
@@ -18,7 +18,7 @@ public sealed class OutputPlan
     private static string Normalize(string path) => path.Replace('/', Path.DirectorySeparatorChar).TrimStart(Path.DirectorySeparatorChar);
 }
 
-public sealed record ProjectMigrationContext(string RootDir, IReadOnlyDictionary<string, string> ProjectMap, PackagePlanner Planner, bool PreserveSqlEncryption, CloudTarget Cloud = CloudTarget.Aws, string SolutionName = "app", bool KeepSecrets = false);
+public sealed record ProjectMigrationContext(string RootDir, IReadOnlyDictionary<string, string> ProjectMap, PackagePlanner Planner, bool PreserveSqlEncryption, CloudTarget Cloud = CloudTarget.Aws, string SolutionName = "app", bool KeepSecrets = false, MigrationTarget Target = MigrationTarget.Net10);
 
 public static partial class ProjectMigrator
 {
@@ -82,6 +82,9 @@ public static partial class ProjectMigrator
         var csprojName = Path.GetFileName(project.ProjectPath);
         result.OutputProjectPath = Path.Combine(result.RelativeDir, csprojName);
 
+        if (ctx.Target == MigrationTarget.NetFramework)
+            return UpgradeFramework(project, ctx);
+
         if (project.IsVisualBasic && !project.IsAlreadyModern)
             return AnalyzeVisualBasic(project, ctx, result, plan);
 
@@ -102,6 +105,7 @@ public static partial class ProjectMigrator
             var modernCode = project.SourceFiles.Where(f => File.Exists(f.FullPath)).Select(f => (Path.GetRelativePath(project.ProjectDir, f.FullPath).Replace('\\', '/'), TextFiles.Read(f.FullPath).Text)).ToList();
             var modernProfile = ApplicationProfiler.Analyze(project, modernCode, LoadConfig(project));
             result.Modernizations.AddRange(ModernizationAdvisor.Analyze(project, modernProfile, modernCode, ctx.Cloud));
+            result.DataScan = DataAccessAnalyzer.Scan(project, modernCode.Concat(DataFiles(project)));
             return new MigratedProject(result, null, plan, modernProfile);
         }
 
@@ -118,6 +122,7 @@ public static partial class ProjectMigrator
         var originalCode = entries.Where(e => e.Role is Role.Code or Role.LegacyCode).Select(e => (e.Unix, e.Text!)).ToList();
         var profile = ApplicationProfiler.Analyze(project, originalCode, LoadConfig(project));
         result.Modernizations.AddRange(ModernizationAdvisor.Analyze(project, profile, originalCode, ctx.Cloud));
+        result.DataScan = DataAccessAnalyzer.Scan(project, originalCode.Concat(DataFiles(project)));
 
         // Windows Service → Worker Service (BackgroundService): deterministic, so the project can run in a Linux container.
         var workers = project.Kind == ProjectKind.WindowsService ? WorkerServiceRewriter.Discover(originalCode) : new WorkerServiceInfo();
@@ -308,6 +313,7 @@ public static partial class ProjectMigrator
             .Select(f => (Path.GetRelativePath(project.ProjectDir, f.FullPath).Replace('\\', '/'), TextFiles.Read(f.FullPath).Text)).ToList();
         var profile = ApplicationProfiler.Analyze(project, sources, LoadConfig(project));
         result.Modernizations.AddRange(ModernizationAdvisor.Analyze(project, profile, [], ctx.Cloud));
+        result.DataScan = DataAccessAnalyzer.Scan(project, sources.Concat(DataFiles(project)));
 
         var lines = sources.Sum(s => s.Item2.Count(c => c == '\n') + 1);
         var markup = project.Items.Select(i => Path.GetRelativePath(project.ProjectDir, i.FullPath)).Where(r => WebFormsMarkup.Contains(Path.GetExtension(r))).ToList();
@@ -381,6 +387,11 @@ public static partial class ProjectMigrator
             $"Marcador '<secret: nome>' no lugar de {string.Join(", ", secrets.Secrets.Select(s => s.ConfigPath).Distinct().Take(6))}. Valores, scripts para o Secrets Manager, bloco da task definition e user-secrets em {folder}/ (ignorado pelo git e pelo Docker).",
             "Rode create-secrets.sh para criar no AWS Secrets Manager e set-user-secrets.sh para desenvolvimento local; depois rotacione as credenciais que estavam em texto claro.", "appsettings.json", auto: true));
     }
+
+    /// <summary>.sql resources and EDMX models feed the data-access inventory (tables/columns) alongside the code.</summary>
+    internal static IEnumerable<(string Path, string Text)> DataFiles(ProjectInfo project) =>
+        project.Items.Where(i => Path.GetExtension(i.FullPath).ToLowerInvariant() is ".sql" or ".edmx" && File.Exists(i.FullPath) && i.IsInside(project.ProjectDir))
+            .Select(i => (Path.GetRelativePath(project.ProjectDir, i.FullPath).Replace('\\', '/'), TextFiles.Read(i.FullPath).Text));
 
     private static XElement? LoadConfig(ProjectInfo project)
     {

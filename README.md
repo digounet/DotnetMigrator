@@ -50,6 +50,10 @@ migrator migrate C:\src\MinhaApp\MinhaApp.sln   # gera C:\src\MinhaApp.net10 + r
 
 **Inventário:** sai em HTML (com filtros), Markdown, Excel e CSV. Cada item traz severidade, arquivo e linha, e uma sugestão. Os erros do compilador da cópia migrada também entram no inventário.
 
+**Dados acessados (sempre):** o relatório lista, por banco, a tecnologia (SQL Server, Oracle...), as tabelas/procedures e os campos que o código acessa, com a operação (SELECT/INSERT/UPDATE/DELETE/EF), a forma de acesso (ADO.NET, Dapper, EF6/EF Core, EDMX, `.sql`) e o arquivo:linha. Veja [Dados acessados](#dados-acessados-bancos-tabelas-e-campos).
+
+**Sem migrar o código (`--target framework`):** quando a decisão é só sair do datacenter, a ferramenta copia os projetos como estão, eleva todos para .NET Framework 4.8.1 (última versão) e gera a infraestrutura de lift-and-shift em **CloudFormation** (EC2 Windows + CodeDeploy). O relatório mostra, lado a lado, a hospedagem de agora (EC2) e a que cada projeto teria após migrar para .NET 10 (ECS Fargate/Lambda). Veja [Destino .NET Framework 4.8.1](#destino-net-framework-481-sem-migrar-o-código).
+
 **Como testei:**
 
 - **Aplicação de exemplo:** criei uma aplicação legada realista em `samples/LegacyShop`, com MVC5 + Web API 2 + EF6, um Windows Service e testes MSTest.
@@ -313,10 +317,43 @@ Compilar não é funcionar. Depois do build de verificação, para os projetos q
 | `inventory.xlsx` | abas Resumo, Inventário, Modernização e Arquitetura AWS, com filtros, para estimar e distribuir o trabalho |
 | `inventory.csv` | integração com outras ferramentas (UTF-8 com BOM) |
 | `modernization.csv` | sugestões de modernização e arquitetura (tipo, impacto, esforço, evidência, serviço AWS) |
+| `data-access.csv` | bancos, tecnologia, tabelas/procedures, campos, operações, forma de acesso e localização (aba "Dados acessados" no Excel) |
 | `migration-result.json` | resultado completo em JSON (inventário, modernização, arquitetura, hospedagem, bancos, hosts internos) |
 | `build-verification.log` | saída completa do build |
-| `infra/` e `.github/workflows/deploy.yml` (na saída) | Terraform da arquitetura proposta e pipeline de deploy |
+| `infra/` e `.github/workflows/deploy.yml` (na saída) | Terraform (ou CloudFormation com `--iac cloudformation` / `--target framework`) da arquitetura proposta e pipeline de deploy |
 | `_secrets/<projeto>/` (na saída, fora do git/Docker) | credenciais retiradas do appsettings: `appsettings.Secrets.json`, template, scripts do Secrets Manager, bloco da task definition, user-secrets |
+
+---
+
+## Dados acessados (bancos, tabelas e campos)
+
+Em qualquer modo (`analyze`, `migrate`, `portfolio`, com ou sem `--cloud`) o relatório traz a seção **"Dados acessados"**: para cada banco, a tecnologia e a lista de tabelas, views e procedures que o código toca, com os campos, as operações, a forma de acesso, os projetos e o arquivo:linha. É o que o negócio e o DBA precisam para decidir o que migrar para o RDS e o que fica.
+
+Fontes (`Analysis/DataAccessAnalyzer`, análise estática):
+
+| Fonte | O que extrai |
+|---|---|
+| SQL em literais C#/VB (inclusive concatenações `"SELECT a, b " + "FROM T " + ...`, strings verbatim e interpoladas) e arquivos `.sql` do projeto | tabelas de `FROM`/`JOIN`/`INSERT INTO`/`UPDATE ... SET`/`DELETE`/`MERGE`/`TRUNCATE`, procedures de `EXEC`; colunas da lista do `SELECT`, do `INSERT (...)`, dos `SET`, do `WHERE`/`ON`/`ORDER BY`/`GROUP BY`; aliases resolvidos; CTEs, tabelas temporárias e `sys.*` ignorados; nomes de três partes (`Banco.dbo.Tabela`) fixam o banco |
+| ADO.NET | `reader["Coluna"]`, `GetOrdinal("Coluna")`, `leitor("Coluna")` (VB) ligados ao comando mais próximo; `CommandType.StoredProcedure` + `Parameters.AddWithValue("@p")` |
+| Dapper | `Query/Execute("sql")` e `commandType: CommandType.StoredProcedure` |
+| EF6 / EF Core | `DbSet<T>` → tabela (`ToTable`/`[Table]`, senão convenção: plural do tipo no EF6, nome do DbSet no EF Core); colunas = propriedades públicas da entidade (em qualquer projeto da solução), com `HasColumnName`/`[Column]`, sem `[NotMapped]`/`Ignore`/navegações; `SaveChanges` marca escrita |
+| EDMX | `EntitySet`/`EntityType` do modelo de armazenamento e `Function` (procedures) |
+
+O banco de cada tabela é resolvido nesta ordem: nome de três partes no SQL → nome da connection string citada no arquivo (`ConnectionStrings["X"]`, `name=X` no `DbContext`) → banco único conhecido pelo projeto, pelos projetos que o hospedam (uma biblioteca usa a connection string da web/console que a referencia) ou pelas dependências. Quando sobra ambiguidade a linha fica como "não identificado (candidatos: ...)" e marcada em amarelo no Excel. A seção é documental: não entra no `AutomationPercent` nem no código de saída.
+
+---
+
+## Destino .NET Framework 4.8.1 (sem migrar o código)
+
+`migrator migrate App.sln --target framework` serve para o caso em que a decisão é tirar a aplicação do datacenter **agora**, sem reescrever nada:
+
+- **Código intocado.** Cada projeto é copiado como está (C# e VB.NET, old-style ou SDK); só o `TargetFrameworkVersion` sobe para `v4.8.1` (`net481` em SDK-style) e os marcadores de runtime dos configs (`supportedRuntime`, `httpRuntime`/`compilation targetFramework`) acompanham. `packages.config`, `Global.asax`, Web Forms, `ServiceBase`, tudo permanece; o `.sln` original é copiado. A saída padrão é `<nome>.net481`. Itens: `PRJ-FX-UPGRADE`, `CFG-FX-RUNTIME`, `CFG-FX-SECRETS` (senhas continuam no config: o CodeDeploy as injeta), `WEB-WEBFORMS-KEPT`, `BUILD-FX-SKIPPED` (o build de verificação exige MSBuild no Windows; o workflow gerado faz isso).
+- **Análise completa.** Perfil, inventário de dados acessados, sugestões de modernização (sem os itens `MOD-CS-*`/`MOD-WIN-*`, que só valem para .NET 10/Linux) e arquitetura rodam normalmente sobre o código original.
+- **Hospedagem: EC2 Windows** para todo projeto publicável (IIS para web, serviço Windows, Agendador de Tarefas para consoles), com a justificativa, os pré-requisitos do lift-and-shift (health check para o ALB, `machineKey`, sessão InProc, pastas de rede → FSx/File Gateway, segredos, Integrated Security → AD, EWS em desligamento) e, na coluna "Alternativas", **a hospedagem que o mesmo projeto teria após migrar para .NET 10** (ECS Fargate, Lambda...). Assim o relatório não contradiz a análise da trilha .NET 10: são duas respostas para duas decisões.
+- **Serviços**: EC2 + Auto Scaling, ALB, RDS, FSx for Windows (pastas UNC) / S3 via File Gateway, Managed AD quando há identidade Windows, Secrets Manager, Systems Manager, CloudWatch agent, CodeDeploy, AWS Backup, VPN. Fases, riscos (licença Windows, 4.x → 4.8.1, EWS, MSMQ local, sessão) e custo seguem o mesmo formato.
+- **Infraestrutura em CloudFormation** (padrão neste destino): veja a seção seguinte.
+
+O caminho recomendado continua sendo migrar para .NET 10; o destino framework é a primeira etapa quando o prazo manda, e a última fase do plano gerado é justamente rodar o Migrator de novo sem `--target framework`.
 
 ---
 
@@ -525,7 +562,9 @@ Saídas: `portfolio-report.html` (tabelas ordenáveis), `portfolio-report.md`, `
 
 ## Infraestrutura como código e CI/CD
 
-No `migrate` (com `--cloud aws`, o padrão) a arquitetura proposta vira artefatos de deploy na saída:
+No `migrate` (com `--cloud aws`, o padrão) a arquitetura proposta vira artefatos de deploy na saída. A ferramenta é Terraform por padrão no destino .NET 10 e CloudFormation no destino framework; `--iac terraform|cloudformation` escolhe explicitamente.
+
+**Terraform** (`--iac terraform`, padrão para .NET 10):
 
 ```
 infra/terraform/      módulo raiz: versions, variables, network (VPC + endpoints), iam, ecs (cluster, task definitions,
@@ -538,6 +577,25 @@ infra/README.md       ordem de execução e checklist de produção
 Princípios: um template por aplicação, parametrizado por variáveis (`terraform.tfvars.example` traz o ponto de partida); nenhum segredo no código (as task definitions referenciam os segredos criados pelos scripts de `_secrets/` via `data "aws_secretsmanager_secret"`; a senha master do RDS é gerenciada pelo próprio RDS); tasks em subnets privadas com VPC endpoints; execution role e task role separadas com permissões restritas ao prefixo da aplicação; health check em `/health`; circuit breaker com rollback no deploy; alarmes de 5xx e CPU. O que a ferramenta não consegue decidir fica como variável ou comentário (certificado ACM, hosts, VPN para a rede interna, recebimento SES).
 
 O código gerado para o sample passa em `terraform fmt -check`, `terraform init` e `terraform validate` (provider AWS 6.x). Projetos não convertidos (VB.NET) e os recomendados para EC2 Windows não geram recursos; o README da infra diz por quê. `--no-infra` desliga a geração.
+
+**CloudFormation** (`--iac cloudformation`, padrão para `--target framework`), em `Cloud/CloudFormationGenerator`:
+
+```
+infra/cloudformation/00-network.yaml     VPC, subnets, NAT, VPC endpoints (exports <app>-<env>-VpcId, -PrivateSubnets...)
+infra/cloudformation/10-data.yaml        RDS com senha master no Secrets Manager; a porta é liberada pela stack de compute
+infra/cloudformation/20-storage.yaml     S3 privado/versionado; fila de eventos do bucket (Lambda); FSx for Windows (framework + pastas UNC)
+infra/cloudformation/30-compute.yaml     .NET 10: cluster ECS, ECR, ALB, serviços web, tarefas agendadas (Scheduler), workers com SQS, alarmes
+                                         framework: IAM, ALB, launch templates (user data instala IIS/.NET 4.8.1/CodeDeploy/CloudWatch agent),
+                                         Auto Scaling groups por projeto, CodeDeploy (app + deployment group), bucket de artefatos, alarmes
+infra/cloudformation/40-lambda.yaml      funções .NET, DLQ, gatilho pela fila de eventos do S3, agendamento para caixa postal, SES recebimento opcional
+infra/cloudformation/parameters/*.json   parâmetros por stack (nada é segredo);  deploy.sh / deploy.ps1 criam as stacks na ordem
+infra/codedeploy/<projeto>/              (framework) appspec.yml + before-install / after-install / application-start / validate-service.ps1:
+                                         IIS site e app pool, serviço Windows (New-Service) ou tarefa agendada (schtasks); o after-install lê o
+                                         segredo <app>/<projeto>/config no Secrets Manager e grava no web.config/app.config da instância
+.github/workflows/deploy.yml             .NET 10: o mesmo workflow do Terraform;  framework: runner Windows com MSBuild → zip → CodeDeploy
+```
+
+As stacks são independentes e ligadas por exports, para que cada time aplique só a sua. Os templates gerados para o sample (nos dois destinos) passam limpos no `cfn-lint`; revalide com ele após mudar o gerador.
 
 ---
 
@@ -703,10 +761,10 @@ dotnet run --project src/Migrator.Cli -- migrate samples\LegacyShop\LegacyShop.s
 ## Referência da linha de comando
 
 ```
-migrator analyze <entrada> [--report <pasta>] [--offline] [--nuget-config <arquivo>] [--nuget-source <url>] [--cloud aws|none] [--llm none|ollama] [--llm-model <m>] [--llm-endpoint <url>] [--llm-timeout <min>] [--llm-no-cache]
-migrator portfolio <pasta> [--report <pasta>] [--offline] [--cloud aws|none] [--baseline <portfolio.json>] [--llm ...]
-migrator migrate <entrada> [--output <pasta>] [--report <pasta>] [--offline] [--cloud aws|none] [--force] [--no-build] [--build-timeout <min>]
-                 [--no-tests] [--no-smoke] [--verify-docker] [--keep-secrets] [--no-infra]
+migrator analyze <entrada> [--report <pasta>] [--offline] [--nuget-config <arquivo>] [--nuget-source <url>] [--cloud aws|none] [--target net10|framework] [--llm none|ollama] [--llm-model <m>] [--llm-endpoint <url>] [--llm-timeout <min>] [--llm-no-cache]
+migrator portfolio <pasta> [--report <pasta>] [--offline] [--cloud aws|none] [--target net10|framework] [--baseline <portfolio.json>] [--llm ...]
+migrator migrate <entrada> [--output <pasta>] [--report <pasta>] [--offline] [--cloud aws|none] [--target net10|framework] [--iac terraform|cloudformation]
+                 [--force] [--no-build] [--build-timeout <min>] [--no-tests] [--no-smoke] [--verify-docker] [--keep-secrets] [--no-infra]
                  [--llm none|ollama] [--llm-model <m>] [--llm-endpoint <url>] [--llm-rounds <n>] [--llm-timeout <min>] [--llm-no-cache]
 ```
 
@@ -719,6 +777,8 @@ migrator migrate <entrada> [--output <pasta>] [--report <pasta>] [--offline] [--
 | `--nuget-config` | todos | `nuget.config` do feed privado; copiado para a raiz da saída e usado na compatibilidade e no restore (alternativa: `MIGRATOR_NUGET_CONFIG`) |
 | `--nuget-source` | todos | URL do service index v3 do feed; gera um `nuget.config` mínimo se não houver |
 | `--cloud` | ambos | Nuvem de destino da proposta de arquitetura e dos Dockerfiles: `aws` (padrão) ou `none` |
+| `--target` | todos | `net10` (padrão: reescreve o código) ou `framework` (código intocado em .NET Framework 4.8.1, EC2 Windows, CloudFormation); veja [Destino .NET Framework 4.8.1](#destino-net-framework-481-sem-migrar-o-código) |
+| `--iac` | migrate | `terraform` ou `cloudformation` (padrão: Terraform para `net10`, CloudFormation para `framework`) |
 | `--llm` | ambos | Assistência por LLM: `none` (padrão) ou `ollama`; veja [Assistência por LLM](#assistência-por-llm-opcional) |
 | `--llm-model`, `--llm-endpoint` | ambos | Modelo e endpoint do provedor |
 | `--llm-rounds` | migrate | Rodadas build → correção → build (padrão 3) |
@@ -731,7 +791,7 @@ migrator migrate <entrada> [--output <pasta>] [--report <pasta>] [--offline] [--
 | `--no-tests`, `--no-smoke` | migrate | Não executa os testes migrados / não sobe as apps web para testar `/health` |
 | `--verify-docker` | migrate | Constrói as imagens dos Dockerfiles gerados com o Docker local |
 | `--keep-secrets` | migrate | Mantém credenciais no appsettings gerado em vez de movê-las para `_secrets/` |
-| `--no-infra` | migrate | Não gera `infra/terraform` nem o workflow de deploy |
+| `--no-infra` | migrate | Não gera `infra/` (Terraform ou CloudFormation) nem o workflow de deploy |
 
 Atrás de proxy corporativo, defina `HTTPS_PROXY` antes de executar. Se o nuget.org estiver inacessível, a ferramenta continua e avisa no relatório.
 

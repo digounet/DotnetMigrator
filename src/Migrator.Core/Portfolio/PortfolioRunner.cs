@@ -1,4 +1,4 @@
-using System.Text.RegularExpressions;
+﻿using System.Text.RegularExpressions;
 using Migrator.Core.Analysis;
 using Migrator.Core.Llm;
 using Migrator.Core.Migration;
@@ -33,7 +33,7 @@ public sealed class PortfolioRunner(ILlmAssistant? assistant = null)
             {
                 var result = await new MigrationEngine(assistant).RunAsync(new MigrationOptions
                 {
-                    InputPath = input, DryRun = true, VerifyBuild = false, Offline = options.Offline, Cloud = options.Cloud, Llm = options.Llm, ReportDir = appReport,
+                    InputPath = input, DryRun = true, VerifyBuild = false, Offline = options.Offline, Cloud = options.Cloud, Target = options.Target, Llm = options.Llm, ReportDir = appReport,
                     NuGetConfigPath = options.NuGetConfigPath, NuGetSourceUrl = options.NuGetSourceUrl
                 }, new Progress<string>(m => progress?.Report($"[{index}/{inputs.Count}] {name}: {m}")), cancellationToken);
                 apps.Add(PortfolioAggregator.Summarize(name, input, result));

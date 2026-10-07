@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Text;
 using Migrator.Core.Models;
 
@@ -106,12 +106,13 @@ public static partial class HtmlReport
         var buildErrors = all.Count(i => i.Category == InventoryCategory.Build && i.Severity == InventorySeverity.Breaking);
 
         sb.Append("<!DOCTYPE html><html lang=\"pt-BR\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
-        sb.Append($"<title>Migração .NET 10 — {E(result.SolutionName)}</title><style>{Css}</style></head><body>");
+        sb.Append($"<title>{E(ReportWriter.Title(result))} — {E(result.SolutionName)}</title><style>{Css}</style></head><body>");
 
         sb.Append("<header>");
-        sb.Append($"<h1>Migração .NET Framework → .NET 10 — {E(result.SolutionName)}</h1><div class=\"meta\">");
+        sb.Append($"<h1>{E(ReportWriter.Title(result))} — {E(result.SolutionName)}</h1><div class=\"meta\">");
         sb.Append($"<span>Origem: {E(result.RootDir)}</span>");
         sb.Append($"<span>Modo: {E(ReportWriter.ModeLabel(result))}</span>");
+        sb.Append($"<span>Destino: {E(result.Options.Target.Display())}</span>");
         if (result.OutputDir != null) sb.Append($"<span>Saída: {E(result.OutputDir)}</span>");
         sb.Append($"<span>Gerado em {result.FinishedAt:dd/MM/yyyy HH:mm}</span>");
         sb.Append($"<span>NuGet verificado: {(result.NuGetChecked ? "sim" : "não")}{(result.NuGetSource != null ? $" · feed: {E(result.NuGetSource)}" : "")}</span>");
@@ -127,6 +128,8 @@ public static partial class HtmlReport
         if (result.BuildSucceeded != null) Card(sb, buildErrors > 0 ? "red" : "green", buildErrors.ToString(), "Erros no build de verificação");
         var modernizations = result.AllModernizations.ToList();
         if (modernizations.Count > 0) Card(sb, "purple", modernizations.Count.ToString(), "Sugestões de modernização");
+        var dataAccess = ReportWriter.DataAccessByDatabase(result);
+        if (dataAccess.Count > 0) Card(sb, "blue", dataAccess.Sum(d => d.Tables.Count).ToString(), $"Tabelas/procedures acessadas em {dataAccess.Count} banco(s)");
         sb.Append("</div>");
 
         sb.Append("<div class=\"panel\"><h2>Projetos</h2><table><thead><tr><th>Projeto</th><th>Tipo</th><th>Origem</th>")
@@ -144,6 +147,7 @@ public static partial class HtmlReport
         }
         sb.Append("</tbody></table></div>");
 
+        if (dataAccess.Count > 0) RenderDataAccess(sb, result, dataAccess);
         if (result.Architecture != null) RenderArchitecture(sb, result);
         if (modernizations.Count > 0) RenderModernization(sb, result, modernizations);
 
@@ -164,13 +168,13 @@ public static partial class HtmlReport
         foreach (var p in result.Projects)
         {
             sb.Append($"<details class=\"project\" id=\"p-{Anchor(p.Project.Name)}\" {(p.Breaking.Any() ? "open" : "")}><summary>{E(p.Project.Name)}")
-              .Append($"<span class=\"sub\">{E(ReportWriter.KindLabel(p.Project))} · {E(p.Project.TargetFramework)} → net10.0 · {E(p.RelativeDir.Length == 0 ? "." : p.RelativeDir)}</span>")
+              .Append($"<span class=\"sub\">{E(ReportWriter.KindLabel(p.Project))} · {E(p.Project.TargetFramework)} → {E(ReportWriter.TargetMoniker(result))} · {E(p.RelativeDir.Length == 0 ? "." : p.RelativeDir)}</span>")
               .Append($"<span class=\"badge breaking\">{p.Breaking.Count()} bloqueantes</span><span class=\"badge warning\">{p.Warnings.Count()} atenção</span><span class=\"badge auto\">{p.Automatic.Count()} automáticos</span></summary>");
             RenderItems(sb, p.Inventory);
             sb.Append("</details>");
         }
 
-        sb.Append("</main><footer>Gerado pelo Migrator (.NET Framework → .NET 10). Itens “Resolvidos automaticamente” ficam ocultos por padrão; marque o filtro para vê-los.</footer>");
+        sb.Append($"</main><footer>Gerado pelo Migrator ({E(ReportWriter.Title(result))}). Itens “Resolvidos automaticamente” ficam ocultos por padrão; marque o filtro para vê-los.</footer>");
         sb.Append($"<script>{Script}</script></body></html>");
         return sb.ToString();
     }
