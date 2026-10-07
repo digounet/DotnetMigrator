@@ -38,15 +38,26 @@ public static partial class MarkdownReport
         // ---- 1. units
         sb.AppendLine(Sub("O que roda onde"));
         sb.AppendLine();
-        sb.AppendLine("| Projeto | Tipo | Hospedagem | Como roda | Template → stack | Endpoint / health / agendamento | Antes do primeiro deploy |");
-        sb.AppendLine("|---|---|---|---|---|---|---|");
+        sb.AppendLine("| Projeto | Tipo | Hospedagem | Como roda | Template → stack | Endpoint / health / agendamento |");
+        sb.AppendLine("|---|---|---|---|---|---|");
         foreach (var u in g.Units)
         {
             var endpoint = string.Join("<br>", new[] { u.Endpoint, u.HealthCheck, u.Schedule }.Where(x => x != null).Select(x => Cell(x!)));
             var template = u.TemplateFile != null ? $"`{u.TemplateFile}` → `{u.Stack}` (`{u.ParametersFile}`)" : u.NotGenerated != null ? $"não gerado: {Cell(u.NotGenerated)}" : "—";
-            sb.AppendLine($"| **{Cell(u.Project)}** (`{u.Micro}`) | {Cell(u.Kind)} | {Cell(u.HostingLabel)}{(u.RequiresWindows ? " ⚠ exige Windows" : "")} | {Cell(u.Runtime)} | {template} | {(endpoint.Length > 0 ? endpoint : "—")} | {Cells(u.Prerequisites)} |");
+            sb.AppendLine($"| **{Cell(u.Project)}** (`{u.Micro}`) | {Cell(u.Kind)} | {Cell(u.HostingLabel)}{(u.RequiresWindows ? " ⚠ exige Windows" : "")} | {Cell(u.Runtime)} | {template} | {(endpoint.Length > 0 ? endpoint : "—")} |");
         }
         sb.AppendLine();
+        if (g.Units.Any(u => u.Prerequisites.Count > 0))
+        {
+            sb.AppendLine("**Antes do primeiro deploy**");
+            sb.AppendLine();
+            foreach (var u in g.Units.Where(u => u.Prerequisites.Count > 0))
+            {
+                sb.AppendLine($"- **{Cell(u.Project)}**");
+                foreach (var pre in u.Prerequisites) sb.AppendLine($"  - {Inline(pre)}");
+            }
+            sb.AppendLine();
+        }
 
         // ---- 2. infra files and parameters
         sb.AppendLine(Sub("Infraestrutura: arquivos, ordem de deploy e parâmetros"));
@@ -63,7 +74,7 @@ public static partial class MarkdownReport
             sb.AppendLine($"| Grupo | Parâmetro | {EnvHeader()} | Arquivos | Descrição |");
             sb.AppendLine($"|---|---|{string.Concat(envs.Select(_ => "---|"))}---|---|");
             foreach (var p in g.Parameters)
-                sb.AppendLine($"| {Cell(p.Group)} | {(p.Placeholder ? "⚠ " : "")}`{p.Name}` | {EnvCells(p.Values)} | {Cell(string.Join(", ", p.Files))} | {Cell(p.Description)} |");
+                sb.AppendLine($"| {Cell(p.Group)} | {(p.Placeholder ? "⚠ " : "")}`{p.Name}` | {EnvCells(p.Values)} | {Cell(ReportWriter.FilesLabel(g, p))} | {Cell(p.Description)} |");
             sb.AppendLine();
         }
 
@@ -92,12 +103,13 @@ public static partial class MarkdownReport
         if (g.Secrets.Count == 0) sb.AppendLine("Nenhuma credencial encontrada no código ou nos configs.");
         else
         {
-            sb.AppendLine("Nenhum valor passa por template, parâmetro ou repositório: os templates criam os nomes e os valores entram pelos scripts de `_secrets/` ou manualmente.");
+            var createdBy = g.Secrets.Select(s => s.CreatedBy).FirstOrDefault(c => c != null);
+            sb.AppendLine($"Nenhum valor passa por template, parâmetro ou repositório: os nomes são criados por `{createdBy ?? "_secrets/"}` e os valores entram pelos scripts de `_secrets/` ou manualmente.");
             sb.AppendLine();
-            sb.AppendLine("| Segredo | Conteúdo | Usado por | Como chega na aplicação | Como preencher | Criado por |");
-            sb.AppendLine("|---|---|---|---|---|---|");
+            sb.AppendLine("| Segredo | Conteúdo | Usado por | Como chega na aplicação | Como preencher |");
+            sb.AppendLine("|---|---|---|---|---|");
             foreach (var s in g.Secrets)
-                sb.AppendLine($"| `{s.Name}` | {Cell(s.Holds)} | {Cell(string.Join(", ", s.UsedBy))} | {Cell(s.DeliveredAs ?? "—")} | {Cell(s.HowToFill)} | {Cell(s.CreatedBy ?? "—")} |");
+                sb.AppendLine($"| `{s.Name}` | {Cell(s.Holds)} | {Cell(string.Join(", ", s.UsedBy))} | {Cell(s.DeliveredAs ?? "—")} | {Cell(s.HowToFill)} |");
         }
         sb.AppendLine();
 
@@ -112,10 +124,10 @@ public static partial class MarkdownReport
                 ? "Os valores chegam às instâncias pelo SSM Parameter Store (`/<feature>/<env>/...`), gravados no `appSettings` do config pelo `after-install.ps1` do CodeDeploy; a aplicação continua lendo `ConfigurationManager.AppSettings[...]`."
                 : "Os valores chegam como variáveis de ambiente da task definition/função (`Secao__Chave`), que o `IConfiguration` lê sem código extra.");
             sb.AppendLine();
-            sb.AppendLine($"| Chave | Tipo | Entrega | Parâmetro | {EnvHeader()} | Origem | Usado por |");
-            sb.AppendLine($"|---|---|---|---|{string.Concat(envs.Select(_ => "---|"))}---|---|");
+            sb.AppendLine($"| Chave → entrega → parâmetro | Tipo | {EnvHeader()} | Origem | Usado por |");
+            sb.AppendLine($"|---|---|{string.Concat(envs.Select(_ => "---|"))}---|---|");
             foreach (var s in g.Settings)
-                sb.AppendLine($"| `{s.Key}` | {Cell(s.Kind)} | {(s.EnvironmentVariable != null ? $"`{s.EnvironmentVariable}`" : "")}{(s.ParameterStorePath != null ? $"`{s.ParameterStorePath}`" : "")} | `{s.Parameter}` | {EnvCells(s.Values)} | {Cell(s.Source)} | {Cell(string.Join(", ", s.UsedBy))} |");
+                sb.AppendLine($"| `{s.Key}`<br>`{s.EnvironmentVariable ?? s.ParameterStorePath}`{(s.Parameter != s.Key && s.Parameter != s.EnvironmentVariable ? $"<br>parâmetro `{s.Parameter}`" : "")} | {Cell(s.Kind)} | {EnvCells(s.Values)} | {Cell(s.Source)} | {Cell(string.Join(", ", s.UsedBy))} |");
         }
         sb.AppendLine();
 

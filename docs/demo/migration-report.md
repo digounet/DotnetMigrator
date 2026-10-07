@@ -3,7 +3,7 @@
 - **Origem:** `/Users/pablo/Source/dotnet/DotnetMigrator/DotnetMigrator/samples/LegacyShop`
 - **Modo:** Análise (nenhum arquivo alterado)
 - **Destino:** .NET Framework 4.8.1
-- **Gerado em:** 07/10/2026 08:01
+- **Gerado em:** 07/10/2026 08:10
 - **Compatibilidade NuGet verificada:** não (feed: nuget.org (https://api.nuget.org/v3/index.json))
 - **Build de verificação:** não executado
 
@@ -31,12 +31,42 @@ Tudo o que precisa ser configurado para **LegacyShop** rodar na AWS: destino **.
 
 ### 2.1 O que roda onde
 
-| Projeto | Tipo | Hospedagem | Como roda | Template → stack | Endpoint / health / agendamento | Antes do primeiro deploy |
-|---|---|---|---|---|---|---|
-| **LegacyShop.Web** (`web`) | Web (MVC/Web API) | EC2 Windows | site no IIS (app pool próprio) em instâncias EC2 Windows com Auto Scaling, atrás do ALB compartilhado; deploy pelo CodeDeploy | `service.yml` → `legacyshop-<env>-web` (`parameters.json`) | https://legacyshop-web.empresa.com.br (ListenerRuleHost; registre no Route 53)<br>GET HealthCheckPath (padrão "/"); responda 200 sem autenticação | • Endpoint de health check para o ALB (página/action que responda 200 sem autenticação, ex.: /health.aspx ou /health); informe o caminho no parâmetro HealthCheckPath da stack.<br>• machineKey explícita no web.config, igual em todas as instâncias (Forms Authentication/ViewState com mais de uma instância atrás do ALB).<br>• Sessão InProc não é compartilhada entre instâncias: habilite stickiness no target group (menos resiliente) ou mova a sessão para SQL Server (aspnet_regsql) / Redis (provider).<br>• Pastas locais (C:\..., App_Data) ficam no disco EBS da instância e se perdem na troca por Auto Scaling: aponte para FSx/File Gateway ou aceite instância única.<br>• Senhas fora do repositório: o script after-install.ps1 do CodeDeploy lê o segredo &lt;app&gt;/&lt;projeto&gt;/config no Secrets Manager e grava no web.config/app.config da instância; rotacione as credenciais que estavam em texto claro.<br>• SMTP interno → Amazon SES (endpoint SMTP na porta 587, credenciais SMTP no Secrets Manager) ou relay pela VPN.<br>• Logs: CloudWatch agent (instalado no user data) coleta Event Log e arquivos de log para o CloudWatch Logs.<br>• Fuso horário da instância definido no user data (tzutil) para manter DateTime.Now como on-premises. |
-| **LegacyShop.Worker** (`worker`) | Windows Service | EC2 Windows | serviço Windows instalado pelo CodeDeploy em EC2 Windows (instância única) | `service-worker.yml` → `legacyshop-<env>-worker` (`parameters-worker.json`) | — | • Pastas locais (C:\..., App_Data) ficam no disco EBS da instância e se perdem na troca por Auto Scaling: aponte para FSx/File Gateway ou aceite instância única.<br>• Integrated Security exige instâncias ingressadas no domínio (AWS Managed Microsoft AD ou AD Connector + VPN) e RDS com autenticação Windows; alternativa simples: autenticação SQL + Secrets Manager.<br>• SMTP interno → Amazon SES (endpoint SMTP na porta 587, credenciais SMTP no Secrets Manager) ou relay pela VPN.<br>• Logs: CloudWatch agent (instalado no user data) coleta Event Log e arquivos de log para o CloudWatch Logs.<br>• Fuso horário da instância definido no user data (tzutil) para manter DateTime.Now como on-premises. |
-| **LegacyShop.Importador** (`importador`) | Console | EC2 Windows | tarefa do Agendador de Tarefas (console) em EC2 Windows, criada pelo CodeDeploy | `service-importador.yml` → `legacyshop-<env>-importador` (`parameters-importador.json`) | gatilho do Agendador de Tarefas definido em codedeploy/&lt;micro&gt;/application-start.ps1 (a cada 15 min por padrão) | • Compartilhamentos \\servidor\pasta → Amazon FSx for Windows File Server (SMB nativo, exige Active Directory) ou AWS Storage Gateway (File Gateway: SMB sobre S3), sem mudar o código; copie os dados com robocopy/DataSync.<br>• Senhas fora do repositório: o script after-install.ps1 do CodeDeploy lê o segredo &lt;app&gt;/&lt;projeto&gt;/config no Secrets Manager e grava no web.config/app.config da instância; rotacione as credenciais que estavam em texto claro.<br>• EWS está sendo desligado no Exchange Online: a leitura da caixa postal deve migrar para Microsoft Graph (o SDK roda no .NET Framework 4.8.1); se o Exchange for on-premises, liberar o acesso pela VPN.<br>• SMTP interno → Amazon SES (endpoint SMTP na porta 587, credenciais SMTP no Secrets Manager) ou relay pela VPN.<br>• Fuso horário da instância definido no user data (tzutil) para manter DateTime.Now como on-premises. |
-| **LegacyShop.Relatorios** (`relatorios`) | Console · VB.NET | EC2 Windows ⚠ exige Windows | tarefa do Agendador de Tarefas (console) em EC2 Windows, criada pelo CodeDeploy | `service-relatorios.yml` → `legacyshop-<env>-relatorios` (`parameters-relatorios.json`) | gatilho do Agendador de Tarefas definido em codedeploy/&lt;micro&gt;/application-start.ps1 (a cada 15 min por padrão) | • Compartilhamentos \\servidor\pasta → Amazon FSx for Windows File Server (SMB nativo, exige Active Directory) ou AWS Storage Gateway (File Gateway: SMB sobre S3), sem mudar o código; copie os dados com robocopy/DataSync.<br>• Senhas fora do repositório: o script after-install.ps1 do CodeDeploy lê o segredo &lt;app&gt;/&lt;projeto&gt;/config no Secrets Manager e grava no web.config/app.config da instância; rotacione as credenciais que estavam em texto claro.<br>• SMTP interno → Amazon SES (endpoint SMTP na porta 587, credenciais SMTP no Secrets Manager) ou relay pela VPN.<br>• Logs: CloudWatch agent (instalado no user data) coleta Event Log e arquivos de log para o CloudWatch Logs.<br>• Fuso horário da instância definido no user data (tzutil) para manter DateTime.Now como on-premises. |
+| Projeto | Tipo | Hospedagem | Como roda | Template → stack | Endpoint / health / agendamento |
+|---|---|---|---|---|---|
+| **LegacyShop.Web** (`web`) | Web (MVC/Web API) | EC2 Windows | site no IIS (app pool próprio) em instâncias EC2 Windows com Auto Scaling, atrás do ALB compartilhado; deploy pelo CodeDeploy | `service.yml` → `legacyshop-<env>-web` (`parameters.json`) | https://legacyshop-web.empresa.com.br (ListenerRuleHost; registre no Route 53)<br>GET HealthCheckPath (padrão "/"); responda 200 sem autenticação |
+| **LegacyShop.Worker** (`worker`) | Windows Service | EC2 Windows | serviço Windows instalado pelo CodeDeploy em EC2 Windows (instância única) | `service-worker.yml` → `legacyshop-<env>-worker` (`parameters-worker.json`) | — |
+| **LegacyShop.Importador** (`importador`) | Console | EC2 Windows | tarefa do Agendador de Tarefas (console) em EC2 Windows, criada pelo CodeDeploy | `service-importador.yml` → `legacyshop-<env>-importador` (`parameters-importador.json`) | gatilho do Agendador de Tarefas definido em codedeploy/&lt;micro&gt;/application-start.ps1 (a cada 15 min por padrão) |
+| **LegacyShop.Relatorios** (`relatorios`) | Console · VB.NET | EC2 Windows ⚠ exige Windows | tarefa do Agendador de Tarefas (console) em EC2 Windows, criada pelo CodeDeploy | `service-relatorios.yml` → `legacyshop-<env>-relatorios` (`parameters-relatorios.json`) | gatilho do Agendador de Tarefas definido em codedeploy/&lt;micro&gt;/application-start.ps1 (a cada 15 min por padrão) |
+
+**Antes do primeiro deploy**
+
+- **LegacyShop.Web**
+  - Endpoint de health check para o ALB (página/action que responda 200 sem autenticação, ex.: /health.aspx ou /health); informe o caminho no parâmetro HealthCheckPath da stack.
+  - machineKey explícita no web.config, igual em todas as instâncias (Forms Authentication/ViewState com mais de uma instância atrás do ALB).
+  - Sessão InProc não é compartilhada entre instâncias: habilite stickiness no target group (menos resiliente) ou mova a sessão para SQL Server (aspnet_regsql) / Redis (provider).
+  - Pastas locais (C:\..., App_Data) ficam no disco EBS da instância e se perdem na troca por Auto Scaling: aponte para FSx/File Gateway ou aceite instância única.
+  - Senhas fora do repositório: o script after-install.ps1 do CodeDeploy lê o segredo &lt;app&gt;/&lt;projeto&gt;/config no Secrets Manager e grava no web.config/app.config da instância; rotacione as credenciais que estavam em texto claro.
+  - SMTP interno → Amazon SES (endpoint SMTP na porta 587, credenciais SMTP no Secrets Manager) ou relay pela VPN.
+  - Logs: CloudWatch agent (instalado no user data) coleta Event Log e arquivos de log para o CloudWatch Logs.
+  - Fuso horário da instância definido no user data (tzutil) para manter DateTime.Now como on-premises.
+- **LegacyShop.Worker**
+  - Pastas locais (C:\..., App_Data) ficam no disco EBS da instância e se perdem na troca por Auto Scaling: aponte para FSx/File Gateway ou aceite instância única.
+  - Integrated Security exige instâncias ingressadas no domínio (AWS Managed Microsoft AD ou AD Connector + VPN) e RDS com autenticação Windows; alternativa simples: autenticação SQL + Secrets Manager.
+  - SMTP interno → Amazon SES (endpoint SMTP na porta 587, credenciais SMTP no Secrets Manager) ou relay pela VPN.
+  - Logs: CloudWatch agent (instalado no user data) coleta Event Log e arquivos de log para o CloudWatch Logs.
+  - Fuso horário da instância definido no user data (tzutil) para manter DateTime.Now como on-premises.
+- **LegacyShop.Importador**
+  - Compartilhamentos \\servidor\pasta → Amazon FSx for Windows File Server (SMB nativo, exige Active Directory) ou AWS Storage Gateway (File Gateway: SMB sobre S3), sem mudar o código; copie os dados com robocopy/DataSync.
+  - Senhas fora do repositório: o script after-install.ps1 do CodeDeploy lê o segredo &lt;app&gt;/&lt;projeto&gt;/config no Secrets Manager e grava no web.config/app.config da instância; rotacione as credenciais que estavam em texto claro.
+  - EWS está sendo desligado no Exchange Online: a leitura da caixa postal deve migrar para Microsoft Graph (o SDK roda no .NET Framework 4.8.1); se o Exchange for on-premises, liberar o acesso pela VPN.
+  - SMTP interno → Amazon SES (endpoint SMTP na porta 587, credenciais SMTP no Secrets Manager) ou relay pela VPN.
+  - Fuso horário da instância definido no user data (tzutil) para manter DateTime.Now como on-premises.
+- **LegacyShop.Relatorios**
+  - Compartilhamentos \\servidor\pasta → Amazon FSx for Windows File Server (SMB nativo, exige Active Directory) ou AWS Storage Gateway (File Gateway: SMB sobre S3), sem mudar o código; copie os dados com robocopy/DataSync.
+  - Senhas fora do repositório: o script after-install.ps1 do CodeDeploy lê o segredo &lt;app&gt;/&lt;projeto&gt;/config no Secrets Manager e grava no web.config/app.config da instância; rotacione as credenciais que estavam em texto claro.
+  - SMTP interno → Amazon SES (endpoint SMTP na porta 587, credenciais SMTP no Secrets Manager) ou relay pela VPN.
+  - Logs: CloudWatch agent (instalado no user data) coleta Event Log e arquivos de log para o CloudWatch Logs.
+  - Fuso horário da instância definido no user data (tzutil) para manter DateTime.Now como on-premises.
 
 ### 2.2 Infraestrutura: arquivos, ordem de deploy e parâmetros
 
@@ -59,37 +89,37 @@ Tudo o que precisa ser configurado para **LegacyShop** rodar na AWS: destino **.
 
 | Grupo | Parâmetro | dev | hom | prod | Arquivos | Descrição |
 |---|---|---|---|---|---|---|
-| Esteira | ⚠ `DevToolsAccount` | 123456789012 | 123456789012 | 123456789012 | parameters-importador.json, parameters-relatorios.json, parameters-worker.json, parameters.json | Conta AWS das ferramentas da esteira (ECR das imagens / artefatos do deploy). |
-| Esteira | `Environment` | dev | hom | prod | parameters-data.json, parameters-importador.json, parameters-relatorios.json, parameters-worker.json, parameters.json | Ambiente (dev, hom, prod): entra nos nomes dos recursos e nos caminhos do Parameter Store. |
-| Esteira | `FeatureName` | legacyshop | legacyshop | legacyshop | parameters-data.json, parameters-importador.json, parameters-relatorios.json, parameters-worker.json, parameters.json | Nome da feature (aplicação), só letras minúsculas; usado pela pipeline para nomear recursos. Não altere. |
-| Esteira | `MicroServiceName` | (varia por arquivo) | (varia por arquivo) | (varia por arquivo) | parameters-importador.json, parameters-relatorios.json, parameters-worker.json, parameters.json | Nome do microsserviço (projeto sem o prefixo da solução), só letras minúsculas. Não altere. |
-| Compartilhada | ⚠ `CodeDeployRoleArn` | — | — | — | parameters-importador.json, parameters-relatorios.json, parameters-worker.json, parameters.json | Service role do CodeDeploy. Vazio = a stack cria. |
-| Compartilhada | ⚠ `InstanceProfileArn` | — | — | — | parameters-importador.json, parameters-relatorios.json, parameters-worker.json, parameters.json | Instance profile da plataforma (SSM, CloudWatch agent, segredos e Parameter Store do prefixo da aplicação, bucket de artefatos). Vazio = a stack cria. |
-| Compartilhada | `ListenerRulePriority` | 100 | 100 | 100 | parameters.json | Prioridade da regra no listener (única por aplicação no mesmo ALB). |
-| Compartilhada | ⚠ `LoadBalancerListenerArn` | arn:aws:elasticloadbalancing:sa-east-1:123456789012:listener/app/alb-compartilhado/xxxx/yyyy | arn:aws:elasticloadbalancing:sa-east-1:123456789012:listener/app/alb-compartilhado/xxxx/yyyy | arn:aws:elasticloadbalancing:sa-east-1:123456789012:listener/app/alb-compartilhado/xxxx/yyyy | parameters.json | Listener HTTPS do Application Load Balancer compartilhado onde a regra da aplicação é criada. |
-| Compartilhada | ⚠ `PrivateSubnetOne` | subnet-xxxxxxxxxxxxxxxx1 | subnet-xxxxxxxxxxxxxxxx1 | subnet-xxxxxxxxxxxxxxxx1 | parameters-data.json, parameters-importador.json, parameters-relatorios.json, parameters-worker.json, parameters.json | Subnet privada 1 (instâncias/tasks e RDS). |
-| Compartilhada | ⚠ `PrivateSubnetThree` | subnet-xxxxxxxxxxxxxxxx3 | subnet-xxxxxxxxxxxxxxxx3 | subnet-xxxxxxxxxxxxxxxx3 | parameters-data.json, parameters-importador.json, parameters-relatorios.json, parameters-worker.json, parameters.json | Subnet privada 3. |
-| Compartilhada | ⚠ `PrivateSubnetTwo` | subnet-xxxxxxxxxxxxxxxx2 | subnet-xxxxxxxxxxxxxxxx2 | subnet-xxxxxxxxxxxxxxxx2 | parameters-data.json, parameters-importador.json, parameters-relatorios.json, parameters-worker.json, parameters.json | Subnet privada 2. |
-| Compartilhada | ⚠ `VPCID` | vpc-xxxxxxxxxxxxxxxxx | vpc-xxxxxxxxxxxxxxxxx | vpc-xxxxxxxxxxxxxxxxx | parameters-data.json, parameters-importador.json, parameters-relatorios.json, parameters-worker.json, parameters.json | ID da VPC da conta, fornecida pela plataforma. |
-| Dimensionamento | `DesiredCapacity` | 1 | 1 | (varia por arquivo) | parameters-importador.json, parameters-relatorios.json, parameters-worker.json, parameters.json | Instâncias desejadas no Auto Scaling group. |
-| Dimensionamento | `InstancePort` | 80 | 80 | 80 | parameters.json | Porta do site no IIS (target group). |
-| Dimensionamento | `InstanceType` | t3.small | t3.medium | t3.large | parameters-importador.json, parameters-relatorios.json, parameters-worker.json, parameters.json | Tipo da instância EC2 Windows. |
-| Dimensionamento | `MaxCapacity` | (varia por arquivo) | (varia por arquivo) | (varia por arquivo) | parameters-importador.json, parameters-relatorios.json, parameters-worker.json, parameters.json | Máximo de instâncias. |
-| Dimensionamento | `MinCapacity` | 1 | 1 | (varia por arquivo) | parameters-importador.json, parameters-relatorios.json, parameters-worker.json, parameters.json | Mínimo de instâncias. |
-| Dimensionamento | `TimeZone` | E. South America Standard Time | E. South America Standard Time | E. South America Standard Time | parameters-importador.json, parameters-relatorios.json, parameters-worker.json, parameters.json | Fuso horário das instâncias (tzutil), para manter DateTime.Now como on-premises. |
-| Dados | ⚠ `ActiveDirectoryId` | — | — | — | parameters-data.json | ID do AWS Managed Microsoft AD (d-xxxx) exigido pelo FSx for Windows; vazio = não criar o FSx. |
-| Dados | `DbEngine` | sqlserver-ex | sqlserver-ex | sqlserver-ex | parameters-data.json | Engine do RDS (sqlserver-ex/se/ee, oracle-se2, mysql, postgres). |
-| Dados | `DbInstanceClass` | db.t3.small | db.t3.small | db.t3.large | parameters-data.json | Classe da instância RDS. |
-| Aplicação | `ApiBaseUrl` | http://localhost:51234/api | http://localhost:51234/api | https://loja.exemplo.com.br/api | parameters.json | URL AppSettings:ApiBaseUrl (appSettings); revise o valor de cada ambiente |
-| Aplicação | `CaixaPostal` | pedidos@exemplo.com.br | pedidos@exemplo.com.br | pedidos@exemplo.com.br | parameters-importador.json | E-mail AppSettings:CaixaPostal (appSettings); revise o valor de cada ambiente |
-| Aplicação | `EmailsEmailSuporte` | suporte@exemplo.com.br | suporte@exemplo.com.br | suporte@exemplo.com.br | parameters.json | E-mail AppSettings:Emails:EmailSuporte (estava fixo no código); revise o valor de cada ambiente |
-| Aplicação | `ErpEndpoint` | http://erp.interno:8080/integracao | http://erp.interno:8080/integracao | https://erp.empresa.com.br/integracao | parameters-worker.json | URL AppSettings:ErpEndpoint (appSettings); revise o valor de cada ambiente |
-| Aplicação | `ExchangeUrl` | https://mail.exemplo.com.br/EWS/Exchange.asmx | https://mail.exemplo.com.br/EWS/Exchange.asmx | https://mail.exemplo.com.br/EWS/Exchange.asmx | parameters-importador.json | URL AppSettings:ExchangeUrl (appSettings); revise o valor de cada ambiente |
-| Aplicação | `HealthCheckPath` | / | / | / | parameters.json | Caminho que responde 200 sem autenticação para o health check do target group. |
-| Aplicação | ⚠ `ListenerRuleHost` | legacyshop-web-dev.empresa.com.br | legacyshop-web-hom.empresa.com.br | legacyshop-web.empresa.com.br | parameters.json | Host header (DNS) da aplicação; crie o registro no Route 53 apontando para o ALB. |
-| Aplicação | `ListenerRulePath` | /* | /* | /* | parameters.json | Caminho roteado para esta aplicação ("/*" quando o host header já a identifica). |
-| Aplicação | `SmtpFrom` | loja@exemplo.com.br | loja@exemplo.com.br | loja@exemplo.com.br | parameters.json | E-mail AppSettings:Smtp.From (appSettings); revise o valor de cada ambiente |
-| Aplicação | `UrlsErpProtocoloUrl` | https://erp.exemplo.com.br/api/protocolo | https://erp.exemplo.com.br/api/protocolo | https://erp.exemplo.com.br/api/protocolo | parameters.json | URL AppSettings:Urls:ErpProtocoloUrl (estava fixo no código); revise o valor de cada ambiente |
+| Esteira | ⚠ `DevToolsAccount` | 123456789012 | 123456789012 | 123456789012 | todos os serviços | Conta AWS das ferramentas da esteira (ECR das imagens / artefatos do deploy). |
+| Esteira | `Environment` | dev | hom | prod | todos | Ambiente (dev, hom, prod): entra nos nomes dos recursos e nos caminhos do Parameter Store. |
+| Esteira | `FeatureName` | legacyshop | legacyshop | legacyshop | todos | Nome da feature (aplicação), só letras minúsculas; usado pela pipeline para nomear recursos. Não altere. |
+| Esteira | `MicroServiceName` | (varia por arquivo) | (varia por arquivo) | (varia por arquivo) | todos os serviços | Nome do microsserviço (projeto sem o prefixo da solução), só letras minúsculas. Não altere. |
+| Compartilhada | ⚠ `CodeDeployRoleArn` | — | — | — | todos os serviços | Service role do CodeDeploy. Vazio = a stack cria. |
+| Compartilhada | ⚠ `InstanceProfileArn` | — | — | — | todos os serviços | Instance profile da plataforma (SSM, CloudWatch agent, segredos e Parameter Store do prefixo da aplicação, bucket de artefatos). Vazio = a stack cria. |
+| Compartilhada | `ListenerRulePriority` | 100 | 100 | 100 | service | Prioridade da regra no listener (única por aplicação no mesmo ALB). |
+| Compartilhada | ⚠ `LoadBalancerListenerArn` | arn:aws:elasticloadbalancing:sa-east-1:123456789012:listener/app/alb-compartilhado/xxxx/yyyy | arn:aws:elasticloadbalancing:sa-east-1:123456789012:listener/app/alb-compartilhado/xxxx/yyyy | arn:aws:elasticloadbalancing:sa-east-1:123456789012:listener/app/alb-compartilhado/xxxx/yyyy | service | Listener HTTPS do Application Load Balancer compartilhado onde a regra da aplicação é criada. |
+| Compartilhada | ⚠ `PrivateSubnetOne` | subnet-xxxxxxxxxxxxxxxx1 | subnet-xxxxxxxxxxxxxxxx1 | subnet-xxxxxxxxxxxxxxxx1 | todos | Subnet privada 1 (instâncias/tasks e RDS). |
+| Compartilhada | ⚠ `PrivateSubnetThree` | subnet-xxxxxxxxxxxxxxxx3 | subnet-xxxxxxxxxxxxxxxx3 | subnet-xxxxxxxxxxxxxxxx3 | todos | Subnet privada 3. |
+| Compartilhada | ⚠ `PrivateSubnetTwo` | subnet-xxxxxxxxxxxxxxxx2 | subnet-xxxxxxxxxxxxxxxx2 | subnet-xxxxxxxxxxxxxxxx2 | todos | Subnet privada 2. |
+| Compartilhada | ⚠ `VPCID` | vpc-xxxxxxxxxxxxxxxxx | vpc-xxxxxxxxxxxxxxxxx | vpc-xxxxxxxxxxxxxxxxx | todos | ID da VPC da conta, fornecida pela plataforma. |
+| Dimensionamento | `DesiredCapacity` | 1 | 1 | (varia por arquivo) | todos os serviços | Instâncias desejadas no Auto Scaling group. |
+| Dimensionamento | `InstancePort` | 80 | 80 | 80 | service | Porta do site no IIS (target group). |
+| Dimensionamento | `InstanceType` | t3.small | t3.medium | t3.large | todos os serviços | Tipo da instância EC2 Windows. |
+| Dimensionamento | `MaxCapacity` | (varia por arquivo) | (varia por arquivo) | (varia por arquivo) | todos os serviços | Máximo de instâncias. |
+| Dimensionamento | `MinCapacity` | 1 | 1 | (varia por arquivo) | todos os serviços | Mínimo de instâncias. |
+| Dimensionamento | `TimeZone` | E. South America Standard Time | E. South America Standard Time | E. South America Standard Time | todos os serviços | Fuso horário das instâncias (tzutil), para manter DateTime.Now como on-premises. |
+| Dados | ⚠ `ActiveDirectoryId` | — | — | — | data | ID do AWS Managed Microsoft AD (d-xxxx) exigido pelo FSx for Windows; vazio = não criar o FSx. |
+| Dados | `DbEngine` | sqlserver-ex | sqlserver-ex | sqlserver-ex | data | Engine do RDS (sqlserver-ex/se/ee, oracle-se2, mysql, postgres). |
+| Dados | `DbInstanceClass` | db.t3.small | db.t3.small | db.t3.large | data | Classe da instância RDS. |
+| Aplicação | `ApiBaseUrl` | http://localhost:51234/api | http://localhost:51234/api | https://loja.exemplo.com.br/api | service | URL AppSettings:ApiBaseUrl (appSettings); revise o valor de cada ambiente |
+| Aplicação | `CaixaPostal` | pedidos@exemplo.com.br | pedidos@exemplo.com.br | pedidos@exemplo.com.br | importador | E-mail AppSettings:CaixaPostal (appSettings); revise o valor de cada ambiente |
+| Aplicação | `EmailsEmailSuporte` | suporte@exemplo.com.br | suporte@exemplo.com.br | suporte@exemplo.com.br | service | E-mail AppSettings:Emails:EmailSuporte (estava fixo no código); revise o valor de cada ambiente |
+| Aplicação | `ErpEndpoint` | http://erp.interno:8080/integracao | http://erp.interno:8080/integracao | https://erp.empresa.com.br/integracao | worker | URL AppSettings:ErpEndpoint (appSettings); revise o valor de cada ambiente |
+| Aplicação | `ExchangeUrl` | https://mail.exemplo.com.br/EWS/Exchange.asmx | https://mail.exemplo.com.br/EWS/Exchange.asmx | https://mail.exemplo.com.br/EWS/Exchange.asmx | importador | URL AppSettings:ExchangeUrl (appSettings); revise o valor de cada ambiente |
+| Aplicação | `HealthCheckPath` | / | / | / | service | Caminho que responde 200 sem autenticação para o health check do target group. |
+| Aplicação | ⚠ `ListenerRuleHost` | legacyshop-web-dev.empresa.com.br | legacyshop-web-hom.empresa.com.br | legacyshop-web.empresa.com.br | service | Host header (DNS) da aplicação; crie o registro no Route 53 apontando para o ALB. |
+| Aplicação | `ListenerRulePath` | /* | /* | /* | service | Caminho roteado para esta aplicação ("/*" quando o host header já a identifica). |
+| Aplicação | `SmtpFrom` | loja@exemplo.com.br | loja@exemplo.com.br | loja@exemplo.com.br | service | E-mail AppSettings:Smtp.From (appSettings); revise o valor de cada ambiente |
+| Aplicação | `UrlsErpProtocoloUrl` | https://erp.exemplo.com.br/api/protocolo | https://erp.exemplo.com.br/api/protocolo | https://erp.exemplo.com.br/api/protocolo | service | URL AppSettings:Urls:ErpProtocoloUrl (estava fixo no código); revise o valor de cada ambiente |
 
 ### 2.3 Banco de dados
 
@@ -121,31 +151,31 @@ Tudo o que precisa ser configurado para **LegacyShop** rodar na AWS: destino **.
 
 ### 2.4 Segredos (Secrets Manager)
 
-Nenhum valor passa por template, parâmetro ou repositório: os templates criam os nomes e os valores entram pelos scripts de `_secrets/` ou manualmente.
+Nenhum valor passa por template, parâmetro ou repositório: os nomes são criados por `infra/data.yml (SecretString: PREENCHER)` e os valores entram pelos scripts de `_secrets/` ou manualmente.
 
-| Segredo | Conteúdo | Usado por | Como chega na aplicação | Como preencher | Criado por |
-|---|---|---|---|---|---|
-| `legacyshop/legacyshop-web/config` | JSON chave→valor gravado no config de LegacyShop.Web pelo CodeDeploy (ConnectionStrings:Nome, AppSettings:Chave). | LegacyShop.Web | chaves do config da instância (after-install.ps1) | manual: JSON chave→valor com as connection strings e demais chaves do web.config/app.config que não podem ficar no repositório | infra/data.yml (SecretString: PREENCHER) |
-| `legacyshop/legacyshop.web/AppSettings/Credenciais/TokenIntegracaoErp` | AppSettings:Credenciais:TokenIntegracaoErp de LegacyShop.Web; valor via _secrets/LegacyShop.Web/create-secrets.sh. | LegacyShop.Web | chave AppSettings:Credenciais:TokenIntegracaoErp do config da instância (after-install.ps1) | _secrets/LegacyShop.Web/create-secrets.sh (o valor que estava no config/código fica em _secrets/, fora do git); rotacione a credencial depois | infra/data.yml (SecretString: PREENCHER) |
-| `legacyshop/legacyshop.web/AppSettings/Credenciais/ConexaoRelatoriosAntiga` | AppSettings:Credenciais:ConexaoRelatoriosAntiga de LegacyShop.Web; valor via _secrets/LegacyShop.Web/create-secrets.sh. | LegacyShop.Web | chave AppSettings:Credenciais:ConexaoRelatoriosAntiga do config da instância (after-install.ps1) | _secrets/LegacyShop.Web/create-secrets.sh (o valor que estava no config/código fica em _secrets/, fora do git); rotacione a credencial depois | infra/data.yml (SecretString: PREENCHER) |
-| `legacyshop/legacyshop-worker/config` | JSON chave→valor gravado no config de LegacyShop.Worker pelo CodeDeploy (ConnectionStrings:Nome, AppSettings:Chave). | LegacyShop.Worker | chaves do config da instância (after-install.ps1) | manual: JSON chave→valor com as connection strings e demais chaves do web.config/app.config que não podem ficar no repositório | infra/data.yml (SecretString: PREENCHER) |
-| `legacyshop/legacyshop-importador/config` | JSON chave→valor gravado no config de LegacyShop.Importador pelo CodeDeploy (ConnectionStrings:Nome, AppSettings:Chave). | LegacyShop.Importador | chaves do config da instância (after-install.ps1) | manual: JSON chave→valor com as connection strings e demais chaves do web.config/app.config que não podem ficar no repositório | infra/data.yml (SecretString: PREENCHER) |
-| `legacyshop/legacyshop-relatorios/config` | JSON chave→valor gravado no config de LegacyShop.Relatorios pelo CodeDeploy (ConnectionStrings:Nome, AppSettings:Chave). | LegacyShop.Relatorios | chaves do config da instância (after-install.ps1) | manual: JSON chave→valor com as connection strings e demais chaves do web.config/app.config que não podem ficar no repositório | infra/data.yml (SecretString: PREENCHER) |
-| `rds!db-... (gerenciado; ARN em DbMasterSecretArn)` | senha master do RDS |  | não vai para a aplicação | automático (RDS); use só para criar o usuário da aplicação | infra/data.yml (ManageMasterUserPassword) |
+| Segredo | Conteúdo | Usado por | Como chega na aplicação | Como preencher |
+|---|---|---|---|---|
+| `legacyshop/legacyshop-web/config` | JSON chave→valor gravado no config de LegacyShop.Web pelo CodeDeploy (ConnectionStrings:Nome, AppSettings:Chave) | LegacyShop.Web | chaves do config da instância (after-install.ps1) | manual: JSON chave→valor com as connection strings e demais chaves do config que não podem ficar no repositório |
+| `legacyshop/legacyshop.web/AppSettings/Credenciais/TokenIntegracaoErp` | AppSettings:Credenciais:TokenIntegracaoErp de LegacyShop.Web | LegacyShop.Web | chave AppSettings:Credenciais:TokenIntegracaoErp do config (after-install.ps1) | _secrets/LegacyShop.Web/create-secrets.sh (valor guardado em _secrets/, fora do git); rotacionar depois |
+| `legacyshop/legacyshop.web/AppSettings/Credenciais/ConexaoRelatoriosAntiga` | AppSettings:Credenciais:ConexaoRelatoriosAntiga de LegacyShop.Web | LegacyShop.Web | chave AppSettings:Credenciais:ConexaoRelatoriosAntiga do config (after-install.ps1) | _secrets/LegacyShop.Web/create-secrets.sh (valor guardado em _secrets/, fora do git); rotacionar depois |
+| `legacyshop/legacyshop-worker/config` | JSON chave→valor gravado no config de LegacyShop.Worker pelo CodeDeploy (ConnectionStrings:Nome, AppSettings:Chave) | LegacyShop.Worker | chaves do config da instância (after-install.ps1) | manual: JSON chave→valor com as connection strings e demais chaves do config que não podem ficar no repositório |
+| `legacyshop/legacyshop-importador/config` | JSON chave→valor gravado no config de LegacyShop.Importador pelo CodeDeploy (ConnectionStrings:Nome, AppSettings:Chave) | LegacyShop.Importador | chaves do config da instância (after-install.ps1) | manual: JSON chave→valor com as connection strings e demais chaves do config que não podem ficar no repositório |
+| `legacyshop/legacyshop-relatorios/config` | JSON chave→valor gravado no config de LegacyShop.Relatorios pelo CodeDeploy (ConnectionStrings:Nome, AppSettings:Chave) | LegacyShop.Relatorios | chaves do config da instância (after-install.ps1) | manual: JSON chave→valor com as connection strings e demais chaves do config que não podem ficar no repositório |
+| `rds!db-... (gerenciado; ARN em DbMasterSecretArn)` | senha master do RDS |  | não vai para a aplicação | automático (RDS); use só para criar o usuário da aplicação |
 
 ### 2.5 Variáveis de ambiente e parâmetros da aplicação
 
 Os valores chegam às instâncias pelo SSM Parameter Store (`/<feature>/<env>/...`), gravados no `appSettings` do config pelo `after-install.ps1` do CodeDeploy; a aplicação continua lendo `ConfigurationManager.AppSettings[...]`.
 
-| Chave | Tipo | Entrega | Parâmetro | dev | hom | prod | Origem | Usado por |
-|---|---|---|---|---|---|---|---|---|
-| `AppSettings:ApiBaseUrl` | URL | `/legacyshop/<env>/ApiBaseUrl` | `ApiBaseUrl` | http://localhost:51234/api | http://localhost:51234/api | https://loja.exemplo.com.br/api | appSettings (Web.config) | LegacyShop.Web |
-| `AppSettings:CaixaPostal` | E-mail | `/legacyshop/<env>/CaixaPostal` | `CaixaPostal` | pedidos@exemplo.com.br | pedidos@exemplo.com.br | pedidos@exemplo.com.br | appSettings (App.config) | LegacyShop.Importador |
-| `AppSettings:Emails:EmailSuporte` | E-mail | `/legacyshop/<env>/Emails/EmailSuporte` | `EmailsEmailSuporte` | suporte@exemplo.com.br | suporte@exemplo.com.br | suporte@exemplo.com.br | fixo no código (Helpers/AppConfig.cs:11) | LegacyShop.Web |
-| `AppSettings:ErpEndpoint` | URL | `/legacyshop/<env>/ErpEndpoint` | `ErpEndpoint` | http://erp.interno:8080/integracao | http://erp.interno:8080/integracao | https://erp.empresa.com.br/integracao | appSettings (App.config) | LegacyShop.Worker |
-| `AppSettings:ExchangeUrl` | URL | `/legacyshop/<env>/ExchangeUrl` | `ExchangeUrl` | https://mail.exemplo.com.br/EWS/Exchange.asmx | https://mail.exemplo.com.br/EWS/Exchange.asmx | https://mail.exemplo.com.br/EWS/Exchange.asmx | appSettings (App.config) | LegacyShop.Importador |
-| `AppSettings:Smtp.From` | E-mail | `/legacyshop/<env>/Smtp.From` | `SmtpFrom` | loja@exemplo.com.br | loja@exemplo.com.br | loja@exemplo.com.br | appSettings (Web.config) | LegacyShop.Web |
-| `AppSettings:Urls:ErpProtocoloUrl` | URL | `/legacyshop/<env>/Urls/ErpProtocoloUrl` | `UrlsErpProtocoloUrl` | https://erp.exemplo.com.br/api/protocolo | https://erp.exemplo.com.br/api/protocolo | https://erp.exemplo.com.br/api/protocolo | fixo no código (Helpers/AppConfig.cs:10) | LegacyShop.Web |
+| Chave → entrega → parâmetro | Tipo | dev | hom | prod | Origem | Usado por |
+|---|---|---|---|---|---|---|
+| `AppSettings:ApiBaseUrl`<br>`/legacyshop/<env>/ApiBaseUrl`<br>parâmetro `ApiBaseUrl` | URL | http://localhost:51234/api | http://localhost:51234/api | https://loja.exemplo.com.br/api | appSettings (Web.config) | LegacyShop.Web |
+| `AppSettings:CaixaPostal`<br>`/legacyshop/<env>/CaixaPostal`<br>parâmetro `CaixaPostal` | E-mail | pedidos@exemplo.com.br | pedidos@exemplo.com.br | pedidos@exemplo.com.br | appSettings (App.config) | LegacyShop.Importador |
+| `AppSettings:Emails:EmailSuporte`<br>`/legacyshop/<env>/Emails/EmailSuporte`<br>parâmetro `EmailsEmailSuporte` | E-mail | suporte@exemplo.com.br | suporte@exemplo.com.br | suporte@exemplo.com.br | fixo no código (Helpers/AppConfig.cs:11) | LegacyShop.Web |
+| `AppSettings:ErpEndpoint`<br>`/legacyshop/<env>/ErpEndpoint`<br>parâmetro `ErpEndpoint` | URL | http://erp.interno:8080/integracao | http://erp.interno:8080/integracao | https://erp.empresa.com.br/integracao | appSettings (App.config) | LegacyShop.Worker |
+| `AppSettings:ExchangeUrl`<br>`/legacyshop/<env>/ExchangeUrl`<br>parâmetro `ExchangeUrl` | URL | https://mail.exemplo.com.br/EWS/Exchange.asmx | https://mail.exemplo.com.br/EWS/Exchange.asmx | https://mail.exemplo.com.br/EWS/Exchange.asmx | appSettings (App.config) | LegacyShop.Importador |
+| `AppSettings:Smtp.From`<br>`/legacyshop/<env>/Smtp.From`<br>parâmetro `SmtpFrom` | E-mail | loja@exemplo.com.br | loja@exemplo.com.br | loja@exemplo.com.br | appSettings (Web.config) | LegacyShop.Web |
+| `AppSettings:Urls:ErpProtocoloUrl`<br>`/legacyshop/<env>/Urls/ErpProtocoloUrl`<br>parâmetro `UrlsErpProtocoloUrl` | URL | https://erp.exemplo.com.br/api/protocolo | https://erp.exemplo.com.br/api/protocolo | https://erp.exemplo.com.br/api/protocolo | fixo no código (Helpers/AppConfig.cs:10) | LegacyShop.Web |
 
 ### 2.6 Armazenamento e filas
 

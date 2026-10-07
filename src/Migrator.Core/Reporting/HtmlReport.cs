@@ -81,6 +81,20 @@ public static partial class HtmlReport
         .panel p.toc { margin: 0 0 12px; display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; } .panel p.toc a { text-decoration: none; }
         ul.checklist { list-style: none; padding-left: 4px; } ul.checklist li { margin-bottom: 4px; } ul.checklist input { margin-right: 6px; }
         .panel table + h4 { margin-top: 20px; }
+        #implantacao .body { overflow-x: auto; }
+        #implantacao table { font-size: 13px; min-width: 900px; }
+        #implantacao th { white-space: nowrap; }
+        #implantacao td { line-height: 1.4; }
+        #implantacao td code { white-space: normal; overflow-wrap: anywhere; }
+        #implantacao td.wrap { min-width: 120px; max-width: 320px; }
+        #implantacao td.files { color: var(--muted); font-size: 12px; min-width: 110px; }
+        #implantacao td.name code { white-space: nowrap; }
+        #implantacao td.env { min-width: 150px; }
+        #implantacao td.res { min-width: 180px; }
+        #implantacao td .sub { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+        #implantacao details.prereq { border: 1px solid var(--border); border-radius: 6px; margin: 6px 0; }
+        #implantacao details.prereq summary { padding: 8px 12px; cursor: pointer; }
+        #implantacao details.prereq ul { padding: 0 12px 10px 30px; }
         """;
 
     private const string Script = """

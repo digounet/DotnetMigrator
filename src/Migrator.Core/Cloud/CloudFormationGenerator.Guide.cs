@@ -276,9 +276,9 @@ public static partial class CloudFormationGenerator
             var extracted = owners.SelectMany(SecretsFor).FirstOrDefault(s => s.SecretName == name);
             var secret = new SecretSetup
             {
-                Name = name, Holds = description,
-                DeliveredAs = extracted == null ? "chaves do config da instância (after-install.ps1)" : plan.Framework ? $"chave {extracted.ConfigPath} do config da instância (after-install.ps1)" : owners.Any(o => o.Result.Hosting!.Primary == AwsHosting.Lambda) ? $"variável {extracted.EnvironmentVariable}_SECRET com o nome; leia com AWSSDK.SecretsManager" : $"variável de ambiente {extracted.EnvironmentVariable} (bloco Secrets da task definition)",
-                HowToFill = extracted == null ? "manual: JSON chave→valor com as connection strings e demais chaves do web.config/app.config que não podem ficar no repositório" : $"_secrets/{owners.First().Result.Project.Name}/create-secrets.sh (o valor que estava no config/código fica em _secrets/, fora do git); rotacione a credencial depois",
+                Name = name, Holds = description.Split("; valor via")[0].TrimEnd('.'),      // the "how to fill" part has its own column
+                DeliveredAs = extracted == null ? "chaves do config da instância (after-install.ps1)" : plan.Framework ? $"chave {extracted.ConfigPath} do config (after-install.ps1)" : owners.Any(o => o.Result.Hosting!.Primary == AwsHosting.Lambda) ? $"variável {extracted.EnvironmentVariable}_SECRET com o nome; ler com AWSSDK.SecretsManager" : $"variável {extracted.EnvironmentVariable} (Secrets da task definition)",
+                HowToFill = extracted == null ? "manual: JSON chave→valor com as connection strings e demais chaves do config que não podem ficar no repositório" : $"_secrets/{owners.First().Result.Project.Name}/create-secrets.sh (valor guardado em _secrets/, fora do git); rotacionar depois",
                 CreatedBy = cloudFormation ? $"{InfraDir}/data.yml (SecretString: PREENCHER)" : "_secrets/<projeto>/create-secrets.sh (Terraform só referencia por nome)"
             };
             secret.UsedBy.AddRange(owners.Select(o => o.Result.Project.Name));

@@ -207,7 +207,7 @@ Lista dos arquivos criados, alterados ou excluidos em cada commit da evolucao pa
 
 24 arquivos.
 
-## Commit seguinte — docs: pages com guia de implantacao e inspecao de DLLs
+## d679a2f (2026-10-07) — docs: pages com guia de implantacao e inspecao de DLLs
 
 | Status | Arquivo |
 |---|---|
@@ -215,3 +215,18 @@ Lista dos arquivos criados, alterados ou excluidos em cada commit da evolucao pa
 | alterado | `docs/index.html` |
 
 2 arquivos.
+
+## Commit seguinte — fix: tabelas do guia de implantacao cabem na tela
+
+| Status | Arquivo |
+|---|---|
+| alterado | `ARQUIVOS-ALTERADOS.md` |
+| alterado | `docs/demo/migration-report.html` |
+| alterado | `docs/demo/migration-report.md` |
+| alterado | `src/Migrator.Core/Cloud/CloudFormationGenerator.Guide.cs` |
+| alterado | `src/Migrator.Core/Reporting/HtmlReport.Deployment.cs` |
+| alterado | `src/Migrator.Core/Reporting/HtmlReport.cs` |
+| alterado | `src/Migrator.Core/Reporting/MarkdownReport.Deployment.cs` |
+| alterado | `src/Migrator.Core/Reporting/ReportWriter.cs` |
+
+8 arquivos.

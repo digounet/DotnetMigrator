@@ -78,6 +78,16 @@ public static class ReportWriter
     /// <summary>Target moniker shown next to each project ("net10.0" or "v4.8.1").</summary>
     public static string TargetMoniker(SolutionResult result) => result.Options.Target.Moniker();
 
+    /// <summary>Which parameter files carry a parameter, short: "todos" when every template has it, otherwise the stack suffixes ("data, worker").</summary>
+    internal static string FilesLabel(DeploymentGuide guide, InfraParameter parameter)
+    {
+        var all = guide.Files.Where(f => f.ParametersFile != null).Select(f => Path.GetFileName(f.ParametersFile!)).Distinct().ToList();
+        if (all.Count > 1 && parameter.Files.Count >= all.Count) return "todos";
+        var services = all.Where(f => f != "parameters-data.json").ToList();
+        if (services.Count > 1 && services.All(parameter.Files.Contains) && !parameter.Files.Contains("parameters-data.json")) return "todos os serviços";
+        return string.Join(", ", parameter.Files.Select(f => f == "parameters.json" ? "service" : f.Replace("parameters-", "").Replace(".json", "")));
+    }
+
     /// <summary>Tables grouped by database for the "Dados acessados" section, with the projects that touch each one merged.</summary>
     internal static List<(string Database, string Technology, List<TableAccess> Tables)> DataAccessByDatabase(SolutionResult result) =>
         result.AllDataAccess
