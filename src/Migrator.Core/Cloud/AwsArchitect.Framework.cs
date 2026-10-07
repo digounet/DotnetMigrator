@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using Migrator.Core.Analysis;
 using Migrator.Core.Models;
 
@@ -11,9 +11,9 @@ namespace Migrator.Core.Cloud;
 /// </summary>
 public static partial class AwsArchitect
 {
-    public static HostingRecommendation Recommend(ProjectInfo project, ApplicationProfile profile, MigrationTarget target)
+    public static HostingRecommendation Recommend(ProjectInfo project, ApplicationProfile profile, MigrationTarget target, bool serverless = false)
     {
-        var modern = Recommend(project, profile);
+        var modern = Recommend(project, profile, serverless);
         if (target == MigrationTarget.Net10) return modern;
         if (modern.Primary is AwsHosting.NotDeployable or AwsHosting.Desktop) return modern;
 

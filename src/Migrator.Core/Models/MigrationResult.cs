@@ -16,14 +16,20 @@ public sealed record MigrationOptions
     /// <summary>Cloud provider for the architecture proposal and container artifacts. None disables the advisor.</summary>
     public CloudTarget Cloud { get; init; } = CloudTarget.Aws;
     /// <summary>
-    /// Net10 (default) rewrites the code for .NET 10. NetFramework keeps the code untouched, only raises every project to
-    /// .NET Framework 4.8.1 (lift-and-shift: EC2 Windows + CloudFormation); analysis, data-access inventory and architecture still run.
+    /// NetFramework (default) keeps the code untouched, only raises every project to .NET Framework 4.8.1 and hosts it on EC2
+    /// Windows (lift-and-shift with CloudFormation); Net10 rewrites the code for .NET 10 (ECS Fargate). Analysis, data-access
+    /// inventory, secrets protection and architecture run in both.
     /// </summary>
-    public MigrationTarget Target { get; init; } = MigrationTarget.Net10;
+    public MigrationTarget Target { get; init; } = MigrationTarget.NetFramework;
     /// <summary>Infrastructure-as-code flavour. Null = Terraform for .NET 10, CloudFormation for the .NET Framework target.</summary>
     public IacTool? Iac { get; init; }
     public IacTool EffectiveIac => Iac ?? (Target == MigrationTarget.NetFramework ? IacTool.CloudFormation : IacTool.Terraform);
     public bool KeepsFramework => Target == MigrationTarget.NetFramework;
+    /// <summary>
+    /// Opt in to AWS Lambda for event-driven automations (requires rewriting the entry point as a handler). Off by default:
+    /// the portfolio is a lift-and-shift, so consoles/services keep their Main() and run as ECS scheduled tasks or workers.
+    /// </summary>
+    public bool Serverless { get; init; }
     /// <summary>nuget.config of the private feed (Artifactory/Nexus...). Copied to the output root and used for compatibility lookups and the verification build. Falls back to MIGRATOR_NUGET_CONFIG, then the source root's nuget.config.</summary>
     public string? NuGetConfigPath { get; init; }
     /// <summary>Explicit v3 service index URL for compatibility lookups (overrides the nuget.config); a minimal nuget.config is generated from it when none exists.</summary>
@@ -52,6 +58,10 @@ public sealed class ProjectResult
     public HostingRecommendation? Hosting { get; set; }
     /// <summary>Tables, views and stored procedures the project's code touches (ADO.NET, Dapper, EF, EDMX, .sql files).</summary>
     public List<TableAccess> DataAccess { get; } = [];
+    /// <summary>URLs, e-mails and credentials that left the code/config of this project and became configuration (IaC parameters / secrets).</summary>
+    public List<ExternalizedSetting> Settings { get; } = [];
+    /// <summary>Own settings plus those of every referenced project: what the deployable actually needs at runtime (filled by the engine).</summary>
+    public List<ExternalizedSetting> SettingsWithDependencies { get; } = [];
     /// <summary>Raw data-access findings, resolved solution-wide by DataAccessAnalyzer.Resolve into <see cref="DataAccess"/>.</summary>
     internal DataAccessScan? DataScan { get; set; }
     public ProjectBuildStatus? Build { get; set; }

@@ -242,6 +242,23 @@ public static partial class InfrastructureGenerator
                 sb.AppendLine("}");
             }
         }
+        var settings = result.Projects.SelectMany(p => p.SettingsWithDependencies).Where(s => s.Kind != SettingKind.Secret).DistinctBy(s => s.Key, StringComparer.OrdinalIgnoreCase).OrderBy(s => s.Key, StringComparer.Ordinal).ToList();
+        if (settings.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("variable \"app_settings\" {");
+            sb.AppendLine("  description = \"URLs e e-mails que estavam fixos no código/appSettings: injetados como variáveis de ambiente (AppSettings__Secao__Chave); um valor por ambiente no tfvars. Segredos não entram aqui.\"");
+            sb.AppendLine("  type        = map(string)");
+            sb.AppendLine("  default = {");
+            foreach (var setting in settings)
+            {
+                // Keys with a dot (AppSettings__Smtp.From) are not HCL identifiers: quote them.
+                var key = Regex.IsMatch(setting.EnvironmentVariable, @"^[A-Za-z_][\w\-]*$") ? setting.EnvironmentVariable : $"\"{setting.EnvironmentVariable}\"";
+                sb.AppendLine($"    {key} = \"{setting.Value.Replace("\"", "\\\"")}\"");
+            }
+            sb.AppendLine("  }");
+            sb.AppendLine("}");
+        }
         if (result.Databases.Count > 0)
         {
             var sqlServer = result.Databases.Any(d => d.Provider == "SQL Server");
@@ -567,10 +584,11 @@ public static partial class InfrastructureGenerator
             sb.AppendLine($"    image     = \"${{aws_ecr_repository.{d.Id}.repository_url}}:${{var.image_tag}}\"");
             sb.AppendLine("    essential = true");
             if (isWeb) sb.AppendLine("    portMappings = [{ containerPort = 8080, protocol = \"tcp\" }]");
-            sb.AppendLine("    environment = [");
+            var hasSettings = result.Projects.Any(p => p.SettingsWithDependencies.Any(x => x.Kind != SettingKind.Secret));
+            sb.AppendLine(hasSettings ? "    environment = concat([" : "    environment = [");
             sb.AppendLine($"      {{ name = \"{(isWeb ? "ASPNETCORE_ENVIRONMENT" : "DOTNET_ENVIRONMENT")}\", value = \"Production\" }},");
             sb.AppendLine("      { name = \"AWS_REGION\", value = var.aws_region }");
-            sb.AppendLine("    ]");
+            sb.AppendLine(hasSettings ? "    ], [for k, v in var.app_settings : { name = k, value = v }])" : "    ]");
             sb.AppendLine("    secrets = [");
             sb.AppendLine(string.Join(",\n", secrets.Select(s => $"      {{ name = \"{s.EnvironmentVariable}\", valueFrom = data.aws_secretsmanager_secret.{d.Id}_{Id(s.EnvironmentVariable)}.arn }}")));
             sb.AppendLine("    ]");
@@ -861,12 +879,13 @@ public static partial class InfrastructureGenerator
             sb.AppendLine("    subnet_ids         = module.vpc.private_subnets");
             sb.AppendLine("    security_group_ids = [aws_security_group.tasks.id]");
             sb.AppendLine("  }");
+            var lambdaSettings = l.Result.SettingsWithDependencies.Any(x => x.Kind != SettingKind.Secret);
             sb.AppendLine("  environment {");
-            sb.AppendLine("    variables = {");
+            sb.AppendLine(lambdaSettings ? "    variables = merge({" : "    variables = {");
             sb.AppendLine("      DOTNET_ENVIRONMENT = \"Production\"");
             sb.AppendLine("      # Segredos: leia em tempo de execução pelo nome (AWSSDK.SecretsManager) ou carregue no IConfiguration com Amazon.Extensions.Configuration.SystemsManager.");
             foreach (var s in secrets) sb.AppendLine($"      SECRET_{Id(s.EnvironmentVariable).ToUpperInvariant()} = \"{s.SecretName}\"");
-            sb.AppendLine("    }");
+            sb.AppendLine(lambdaSettings ? "    }, var.app_settings)" : "    }");
             sb.AppendLine("  }");
             sb.AppendLine($"  depends_on = [aws_cloudwatch_log_group.{l.Id}]");
             sb.AppendLine("}");

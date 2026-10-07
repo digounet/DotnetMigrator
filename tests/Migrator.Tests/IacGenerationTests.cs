@@ -1,4 +1,4 @@
-using Migrator.Core.Migration;
+﻿using Migrator.Core.Migration;
 using Migrator.Core.Models;
 
 namespace Migrator.Tests;
@@ -21,7 +21,7 @@ public sealed class IacGenerationTests : IDisposable
     public async Task Migrate_writes_terraform_and_workflow_from_the_architecture()
     {
         var output = Path.Combine(_work, "out");
-        var result = await new MigrationEngine().RunAsync(new MigrationOptions { InputPath = SampleSolution(), OutputDir = output, Offline = true, VerifyBuild = false });
+        var result = await new MigrationEngine().RunAsync(new MigrationOptions { Target = MigrationTarget.Net10, InputPath = SampleSolution(), OutputDir = output, Offline = true, VerifyBuild = false, Serverless = true });
         string Read(string relative) => File.ReadAllText(Path.Combine(output, relative));
 
         Assert.Contains(result.GlobalItems, i => i.RuleId == "AWS-INFRA" && i.AutoMigrated);
@@ -72,12 +72,12 @@ public sealed class IacGenerationTests : IDisposable
     public async Task No_infra_flag_and_cloud_none_skip_generation()
     {
         var output = Path.Combine(_work, "out2");
-        var result = await new MigrationEngine().RunAsync(new MigrationOptions { InputPath = SampleSolution(), OutputDir = output, Offline = true, VerifyBuild = false, GenerateInfrastructure = false });
+        var result = await new MigrationEngine().RunAsync(new MigrationOptions { Target = MigrationTarget.Net10, InputPath = SampleSolution(), OutputDir = output, Offline = true, VerifyBuild = false, GenerateInfrastructure = false });
         Assert.False(Directory.Exists(Path.Combine(output, "infra")));
         Assert.DoesNotContain(result.GlobalItems, i => i.RuleId == "AWS-INFRA");
 
         var output2 = Path.Combine(_work, "out3");
-        await new MigrationEngine().RunAsync(new MigrationOptions { InputPath = SampleSolution(), OutputDir = output2, Offline = true, VerifyBuild = false, Cloud = CloudTarget.None });
+        await new MigrationEngine().RunAsync(new MigrationOptions { Target = MigrationTarget.Net10, InputPath = SampleSolution(), OutputDir = output2, Offline = true, VerifyBuild = false, Cloud = CloudTarget.None });
         Assert.False(Directory.Exists(Path.Combine(output2, "infra")));
     }
 }

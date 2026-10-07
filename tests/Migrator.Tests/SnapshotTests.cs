@@ -1,4 +1,4 @@
-using Migrator.Core.Migration;
+﻿using Migrator.Core.Migration;
 using Migrator.Core.Models;
 
 namespace Migrator.Tests;
@@ -47,9 +47,7 @@ public sealed class SnapshotTests : IDisposable
         var snapshots = Path.Combine(root, "tests", "Migrator.Tests", "Snapshots");
         var update = Environment.GetEnvironmentVariable("MIGRATOR_UPDATE_SNAPSHOTS") == "1";
         var output = Path.Combine(_work, "out");
-        await new MigrationEngine().RunAsync(new MigrationOptions
-        {
-            InputPath = Path.Combine(root, "samples", "LegacyShop", "LegacyShop.sln"), OutputDir = output, Offline = true, VerifyBuild = false
+        await new MigrationEngine().RunAsync(new MigrationOptions { Target = MigrationTarget.Net10, InputPath = Path.Combine(root, "samples", "LegacyShop", "LegacyShop.sln"), OutputDir = output, Offline = true, VerifyBuild = false, Serverless = true
         });
 
         var differences = new List<string>();

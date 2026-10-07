@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Text.Json.Nodes;
 using Migrator.Core.Llm;
 using Migrator.Core.Migration;
@@ -136,7 +136,7 @@ public sealed class LlmTests : IDisposable
     [Fact]
     public async Task Session_stops_after_the_first_failure_and_records_one_warning()
     {
-        var result = new SolutionResult { Options = new MigrationOptions { InputPath = "x" }, RootDir = _work };
+        var result = new SolutionResult { Options = new MigrationOptions { Target = MigrationTarget.Net10, InputPath = "x" }, RootDir = _work };
         var session = new LlmSession(new BrokenAssistant(), result);
         Assert.Null(await session.TryCompleteAsync("s", "u", CancellationToken.None));
         Assert.Null(await session.TryCompleteAsync("s", "u", CancellationToken.None));
@@ -162,7 +162,7 @@ public sealed class LlmTests : IDisposable
             """;
         await File.WriteAllTextAsync(servicePath, original);
 
-        var result = new SolutionResult { Options = new MigrationOptions { InputPath = "x" }, RootDir = _work, OutputDir = output, ReportDir = report };
+        var result = new SolutionResult { Options = new MigrationOptions { Target = MigrationTarget.Net10, InputPath = "x" }, RootDir = _work, OutputDir = output, ReportDir = report };
         var core = WebProject("Core", "Core");
         core.Inventory.Add(BuildError("Core", "Services/ProdutoService.cs", 3, "CS0103", "The name 'configuration' does not exist in the current context", "Injete IConfiguration no construtor."));
         core.Inventory.Add(BuildError("Core", "_Legacy/Old.cs", 1, "CS0103", "ignored", ""));
@@ -209,7 +209,7 @@ public sealed class LlmTests : IDisposable
         const string original = "public class A { void M() { var x = Oops(); } }";
         await File.WriteAllTextAsync(path, original);
 
-        var result = new SolutionResult { Options = new MigrationOptions { InputPath = "x" }, RootDir = _work, OutputDir = output, ReportDir = report };
+        var result = new SolutionResult { Options = new MigrationOptions { Target = MigrationTarget.Net10, InputPath = "x" }, RootDir = _work, OutputDir = output, ReportDir = report };
         var web = WebProject("Web", "Web");
         web.Inventory.Add(BuildError("Web", "A.cs", 1, "CS0103", "The name 'Oops' does not exist", ""));
         result.Projects.Add(web);
@@ -265,7 +265,7 @@ public sealed class LlmTests : IDisposable
               <ItemGroup><PackageReference Include="Dapper" Version="2.1.66" /><PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.0" /></ItemGroup>
             </Project>
             """);
-        var result = new SolutionResult { Options = new MigrationOptions { InputPath = "x" }, RootDir = _work, OutputDir = output, ReportDir = Path.Combine(output, "rep") };
+        var result = new SolutionResult { Options = new MigrationOptions { Target = MigrationTarget.Net10, InputPath = "x" }, RootDir = _work, OutputDir = output, ReportDir = Path.Combine(output, "rep") };
         var core = new ProjectResult { Project = new ProjectInfo { ProjectPath = Path.Combine("C:", "src", "Core", "Core.csproj"), Name = "Core", Kind = ProjectKind.ClassLibrary }, RelativeDir = "Core", OutputProjectPath = Path.Combine("Core", "Core.csproj") };
         core.Inventory.Add(BuildError("Core", "A.cs", 1, "CS0103", "x", ""));
         result.Projects.Add(core);
@@ -285,7 +285,7 @@ public sealed class LlmTests : IDisposable
         var path = Path.Combine(output, "Core", "Cache.cs");
         const string original = "public class Cache { void M() { var f = new BinaryFormatter(); } }";
         await File.WriteAllTextAsync(path, original);
-        var result = new SolutionResult { Options = new MigrationOptions { InputPath = "x" }, RootDir = _work, OutputDir = output, ReportDir = report };
+        var result = new SolutionResult { Options = new MigrationOptions { Target = MigrationTarget.Net10, InputPath = "x" }, RootDir = _work, OutputDir = output, ReportDir = report };
         var core = WebProject("Core", "Core");
         core.Inventory.Add(BuildError("Core", "Cache.cs", 1, "SYSLIB0011", "BinaryFormatter is obsolete", ""));
         result.Projects.Add(core);
@@ -323,7 +323,7 @@ public sealed class LlmTests : IDisposable
         var output = Path.Combine(_work, "out3");
         Directory.CreateDirectory(Path.Combine(output, "Web"));
         await File.WriteAllTextAsync(Path.Combine(output, "Web", "A.cs"), "public class A { }");
-        var result = new SolutionResult { Options = new MigrationOptions { InputPath = "x" }, RootDir = _work, OutputDir = output, ReportDir = Path.Combine(output, "rep") };
+        var result = new SolutionResult { Options = new MigrationOptions { Target = MigrationTarget.Net10, InputPath = "x" }, RootDir = _work, OutputDir = output, ReportDir = Path.Combine(output, "rep") };
         var web = WebProject("Web", "Web");
         web.Inventory.Add(BuildError("Web", "A.cs", 1, "CS0246", "x", ""));
         result.Projects.Add(web);
@@ -345,7 +345,7 @@ public sealed class LlmTests : IDisposable
         Directory.CreateDirectory(Path.Combine(output, "Web", "Modules"));
         var module = Path.Combine(output, "Web", "Modules", "RequestTimingModule.cs");
         await File.WriteAllTextAsync(module, "public class RequestTimingModule : IHttpModule { }");
-        var result = new SolutionResult { Options = new MigrationOptions { InputPath = "x" }, RootDir = _work, OutputDir = output, ReportDir = Path.Combine(output, "rep") };
+        var result = new SolutionResult { Options = new MigrationOptions { Target = MigrationTarget.Net10, InputPath = "x" }, RootDir = _work, OutputDir = output, ReportDir = Path.Combine(output, "rep") };
         var web = WebProject("Web", "Web");
         web.Inventory.Add(new InventoryItem { Project = "Web", RuleId = "WEB016", Severity = InventorySeverity.Breaking, Category = InventoryCategory.Code, Title = "IHttpModule", FilePath = "Modules/RequestTimingModule.cs" });
         web.Inventory.Add(new InventoryItem { Project = "Web", RuleId = "WEB003", Severity = InventorySeverity.Breaking, Category = InventoryCategory.Code, Title = "Session", FilePath = "Controllers/X.cs" });
@@ -366,7 +366,7 @@ public sealed class LlmTests : IDisposable
     [Fact]
     public async Task Narrator_feeds_the_dossier_and_stores_the_executive_summary()
     {
-        var result = new SolutionResult { Options = new MigrationOptions { InputPath = "x" }, RootDir = _work, SolutionName = "Loja" };
+        var result = new SolutionResult { Options = new MigrationOptions { Target = MigrationTarget.Net10, InputPath = "x" }, RootDir = _work, SolutionName = "Loja" };
         var web = WebProject("Loja.Web", "Loja.Web");
         web.Hosting = new HostingRecommendation { Project = "Loja.Web", Kind = ProjectKind.Web, Primary = AwsHosting.EcsFargate };
         web.Hosting.Rationale.Add("sem dependências Windows");
@@ -394,7 +394,7 @@ public sealed class LlmTests : IDisposable
         var projectDir = Path.Combine(_work, "src", "Robo");
         Directory.CreateDirectory(projectDir);
         await File.WriteAllTextAsync(Path.Combine(projectDir, "Exportador.cs"), string.Join("\n", Enumerable.Range(1, 30).Select(i => i == 15 ? "        File.WriteAllText(Path.GetTempFileName(), csv);" : $"        // linha {i}")));
-        var result = new SolutionResult { Options = new MigrationOptions { InputPath = "x" }, RootDir = _work };
+        var result = new SolutionResult { Options = new MigrationOptions { Target = MigrationTarget.Net10, InputPath = "x" }, RootDir = _work };
         var project = new ProjectResult { Project = new ProjectInfo { ProjectPath = Path.Combine(projectDir, "Robo.csproj"), Name = "Robo", Kind = ProjectKind.Console }, RelativeDir = "Robo" };
         project.Modernizations.Add(new ModernizationItem { Project = "Robo", RuleId = "MOD-ARCH-FILES", Impact = Impact.High, Title = "Arquivos", Why = "Grava arquivos.", Proposal = "S3.", Evidence = "Exportador.cs:15, Outro.cs:3" });
         project.Modernizations.Add(new ModernizationItem { Project = "Robo", RuleId = "MOD-CS-STATIC-STATE", Impact = Impact.High, Title = "Estático", Why = "x", Proposal = "y", Evidence = "Exportador.cs:15" });
@@ -435,24 +435,20 @@ public sealed class LlmTests : IDisposable
         while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Migrator.slnx"))) dir = dir.Parent;
         var sample = Path.Combine(dir!.FullName, "samples", "LegacyShop", "LegacyShop.sln");
 
-        var plain = await new MigrationEngine().RunAsync(new MigrationOptions { InputPath = sample, DryRun = true, Offline = true, ReportDir = Path.Combine(_work, "r1") });
+        var plain = await new MigrationEngine().RunAsync(new MigrationOptions { Target = MigrationTarget.Net10, InputPath = sample, DryRun = true, Offline = true, ReportDir = Path.Combine(_work, "r1") });
         Assert.Null(plain.LlmModel);
         Assert.DoesNotContain(plain.AllItems, i => i.RuleId.StartsWith("LLM-"));
         Assert.Null(plain.Architecture!.ExecutiveSummary);
 
         var assistant = new ScriptedAssistant((_, _) => "Resumo escrito pela LLM.", "empresa/sdk");
-        var assisted = await new MigrationEngine(assistant).RunAsync(new MigrationOptions
-        {
-            InputPath = sample, DryRun = true, Offline = true, ReportDir = Path.Combine(_work, "r2"), Llm = new LlmOptions { CacheDir = null }
+        var assisted = await new MigrationEngine(assistant).RunAsync(new MigrationOptions { Target = MigrationTarget.Net10, InputPath = sample, DryRun = true, Offline = true, ReportDir = Path.Combine(_work, "r2"), Llm = new LlmOptions { CacheDir = null }
         });
         Assert.Equal("empresa/sdk", assisted.LlmModel);
         Assert.Equal("Resumo escrito pela LLM.", assisted.Architecture!.ExecutiveSummary);
         Assert.True(assistant.Calls >= 1); // analyze: narrative + triage of ambiguous items (no build, no files on disk)
         Assert.Contains("Leitura do arquiteto (LLM: empresa/sdk)", await File.ReadAllTextAsync(Path.Combine(_work, "r2", "migration-report.md")));
 
-        var broken = await new MigrationEngine(new BrokenAssistant()).RunAsync(new MigrationOptions
-        {
-            InputPath = sample, DryRun = true, Offline = true, ReportDir = Path.Combine(_work, "r3"), Llm = new LlmOptions { CacheDir = null }
+        var broken = await new MigrationEngine(new BrokenAssistant()).RunAsync(new MigrationOptions { Target = MigrationTarget.Net10, InputPath = sample, DryRun = true, Offline = true, ReportDir = Path.Combine(_work, "r3"), Llm = new LlmOptions { CacheDir = null }
         });
         Assert.Contains(broken.GlobalItems, i => i.RuleId == "LLM-UNAVAILABLE");
         Assert.Equal(6, broken.Projects.Count); // migration itself unaffected

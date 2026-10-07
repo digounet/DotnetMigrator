@@ -53,6 +53,14 @@ data "aws_secretsmanager_secret" "legacyshop_web_appsettings__pagamentoapikey" {
   name = "legacyshop/legacyshop.web/AppSettings/PagamentoApiKey" # crie antes com _secrets/LegacyShop.Web/create-secrets.sh
 }
 
+data "aws_secretsmanager_secret" "legacyshop_web_appsettings__credenciais__tokenintegracaoerp" {
+  name = "legacyshop/legacyshop.web/AppSettings/Credenciais/TokenIntegracaoErp" # crie antes com _secrets/LegacyShop.Web/create-secrets.sh
+}
+
+data "aws_secretsmanager_secret" "legacyshop_web_appsettings__credenciais__conexaorelatoriosantiga" {
+  name = "legacyshop/legacyshop.web/AppSettings/Credenciais/ConexaoRelatoriosAntiga" # crie antes com _secrets/LegacyShop.Web/create-secrets.sh
+}
+
 resource "aws_ecs_task_definition" "legacyshop_web" {
   family                   = "${local.name}-legacyshop-web"
   requires_compatibilities = ["FARGATE"]
@@ -70,14 +78,16 @@ resource "aws_ecs_task_definition" "legacyshop_web" {
     image        = "${aws_ecr_repository.legacyshop_web.repository_url}:${var.image_tag}"
     essential    = true
     portMappings = [{ containerPort = 8080, protocol = "tcp" }]
-    environment = [
+    environment = concat([
       { name = "ASPNETCORE_ENVIRONMENT", value = "Production" },
       { name = "AWS_REGION", value = var.aws_region }
-    ]
+    ], [for k, v in var.app_settings : { name = k, value = v }])
     secrets = [
       { name = "ConnectionStrings__RelatoriosConnection", valueFrom = data.aws_secretsmanager_secret.legacyshop_web_connectionstrings__relatoriosconnection.arn },
       { name = "Smtp__Password", valueFrom = data.aws_secretsmanager_secret.legacyshop_web_smtp__password.arn },
-      { name = "AppSettings__PagamentoApiKey", valueFrom = data.aws_secretsmanager_secret.legacyshop_web_appsettings__pagamentoapikey.arn }
+      { name = "AppSettings__PagamentoApiKey", valueFrom = data.aws_secretsmanager_secret.legacyshop_web_appsettings__pagamentoapikey.arn },
+      { name = "AppSettings__Credenciais__TokenIntegracaoErp", valueFrom = data.aws_secretsmanager_secret.legacyshop_web_appsettings__credenciais__tokenintegracaoerp.arn },
+      { name = "AppSettings__Credenciais__ConexaoRelatoriosAntiga", valueFrom = data.aws_secretsmanager_secret.legacyshop_web_appsettings__credenciais__conexaorelatoriosantiga.arn }
     ]
     logConfiguration = {
       logDriver = "awslogs"
@@ -150,10 +160,10 @@ resource "aws_ecs_task_definition" "legacyshop_worker" {
     name      = "legacyshop-worker"
     image     = "${aws_ecr_repository.legacyshop_worker.repository_url}:${var.image_tag}"
     essential = true
-    environment = [
+    environment = concat([
       { name = "DOTNET_ENVIRONMENT", value = "Production" },
       { name = "AWS_REGION", value = var.aws_region }
-    ]
+    ], [for k, v in var.app_settings : { name = k, value = v }])
     secrets = [
 
     ]

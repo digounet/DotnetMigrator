@@ -11,7 +11,8 @@ public sealed record PortfolioOptions
     public bool Offline { get; init; }
     public CloudTarget Cloud { get; init; } = CloudTarget.Aws;
     /// <summary>Net10 (default) or NetFramework: changes the hosting recommendation of every app (EC2 Windows lift-and-shift).</summary>
-    public MigrationTarget Target { get; init; } = MigrationTarget.Net10;
+    public MigrationTarget Target { get; init; } = MigrationTarget.NetFramework;
+    public bool Serverless { get; init; }
     public LlmOptions Llm { get; init; } = new();
     public string? NuGetConfigPath { get; init; }
     public string? NuGetSourceUrl { get; init; }

@@ -1,10 +1,14 @@
-using System.Configuration;
+﻿using System.Configuration;
 
 namespace LegacyShop.Web.Helpers
 {
     public static class AppConfig
     {
         public static string ApiBaseUrl => ConfigurationManager.AppSettings["ApiBaseUrl"];
+
+        // Endereços fixos no código desde 2015: mudam por ambiente, mas ninguém mexeu.
+        public const string ErpProtocoloUrl = "https://erp.exemplo.com.br/api/protocolo";
+        public static readonly string EmailSuporte = "suporte@exemplo.com.br";
 
         // Credencial deixada no código em 2015 "temporariamente".
         public const string TokenIntegracaoErp = "erp-9f3b2c1d-token-legado";

@@ -124,6 +124,10 @@ public static partial class ProjectMigrator
         result.Modernizations.AddRange(ModernizationAdvisor.Analyze(project, profile, originalCode, ctx.Cloud));
         result.DataScan = DataAccessAnalyzer.Scan(project, originalCode.Concat(DataFiles(project)));
 
+        // Fixed URLs/e-mails/credentials in the code become configuration reads before any other rewrite (the regular
+        // pipeline then turns ConfigurationManager.AppSettings[...] into configuration[...]); the keys are added to the config below.
+        var externalized = ExternalizeLiterals(project, codeEntries, result, ctx);
+
         // Windows Service → Worker Service (BackgroundService): deterministic, so the project can run in a Linux container.
         var workers = project.Kind == ProjectKind.WindowsService ? WorkerServiceRewriter.Discover(originalCode) : new WorkerServiceInfo();
         if (workers.Any)
@@ -150,6 +154,8 @@ public static partial class ProjectMigrator
 
         var config = ConfigMigrator.Migrate(project, ctx.PreserveSqlEncryption);
         var secrets = ctx.KeepSecrets ? new SecretsPlan() : SecretsExtractor.Extract(config, ctx.SolutionName, project.Name);
+        result.Settings.AddRange(ConfigSettingsCollector.Collect(project, LoadConfig(project)));
+        AddExternalizedToConfig(project, externalized, config, secrets, result, ctx);
         if (secrets.Any)
         {
             result.Secrets = secrets;

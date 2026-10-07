@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Migrator.Core.Analysis;
 using Migrator.Core.Models;
 using Migrator.Core.Portfolio;
@@ -14,7 +14,7 @@ public sealed class PortfolioTests : IDisposable
 
     private static SolutionResult Solution(string name, int breaking, int warnings, int highImpact, bool windows = false, params (string Server, string Db)[] databases)
     {
-        var result = new SolutionResult { Options = new MigrationOptions { InputPath = name }, RootDir = "/x/" + name, SolutionName = name };
+        var result = new SolutionResult { Options = new MigrationOptions { Target = MigrationTarget.Net10, InputPath = name }, RootDir = "/x/" + name, SolutionName = name };
         var project = new ProjectResult
         {
             Project = new ProjectInfo { ProjectPath = $"/x/{name}/{name}.Web/{name}.Web.csproj", Name = name + ".Web", Kind = ProjectKind.Web },
@@ -130,7 +130,7 @@ public sealed class PortfolioTests : IDisposable
         var samples = Path.Combine(dir!.FullName, "samples");
         var report = Path.Combine(_work, "portfolio");
 
-        var result = await new PortfolioRunner().RunAsync(new PortfolioOptions { RootDir = samples, ReportDir = report, Offline = true });
+        var result = await new PortfolioRunner().RunAsync(new PortfolioOptions { Target = MigrationTarget.Net10, Serverless = true, RootDir = samples, ReportDir = report, Offline = true });
 
         var app = Assert.Single(result.Apps);
         Assert.Equal("LegacyShop", app.Name);

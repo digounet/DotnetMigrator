@@ -1,4 +1,4 @@
-using Migrator.Core.Migration;
+﻿using Migrator.Core.Migration;
 using Migrator.Core.Models;
 
 namespace Migrator.Tests;
@@ -46,9 +46,7 @@ public sealed class FrameworkTargetTests : IDisposable
     public async Task Framework_target_keeps_code_raises_to_481_and_hosts_on_ec2_windows()
     {
         var output = Path.Combine(_work, "LegacyShop.net481");
-        var result = await new MigrationEngine().RunAsync(new MigrationOptions
-        {
-            InputPath = SampleSolution(), OutputDir = output, Offline = true, VerifyBuild = true, Target = MigrationTarget.NetFramework // the build is skipped on purpose for this target
+        var result = await new MigrationEngine().RunAsync(new MigrationOptions { InputPath = SampleSolution(), OutputDir = output, Offline = true, VerifyBuild = true, Target = MigrationTarget.NetFramework, Serverless = true // the build is skipped on purpose for this target
         });
         string Read(string relative) => File.ReadAllText(Path.Combine(output, relative));
         bool Exists(string relative) => File.Exists(Path.Combine(output, relative));
@@ -103,35 +101,79 @@ public sealed class FrameworkTargetTests : IDisposable
         Assert.Contains("EC2 Windows - Auto Scaling", result.Architecture.Diagram);
         Assert.Contains(result.Architecture.Phases, p => p.Contains("--target framework"));
 
-        // Infrastructure: CloudFormation stacks + CodeDeploy bundles + Windows workflow (no Terraform).
+        // Infrastructure in the platform layout: service.yml per application (EC2 Windows + CodeDeploy), data.yml, <env>/parameters*.json, no Terraform.
         Assert.False(Directory.Exists(Path.Combine(output, "infra", "terraform")));
-        foreach (var stack in new[] { "00-network", "10-data", "20-storage", "30-compute" })
-        {
-            Assert.True(Exists($"infra/cloudformation/{stack}.yaml"), stack);
-            Assert.True(Exists($"infra/cloudformation/parameters/{stack}.json"), stack);
-        }
-        Assert.False(Exists("infra/cloudformation/40-lambda.yaml"));
-        var compute = Read("infra/cloudformation/30-compute.yaml");
-        Assert.Contains("LegacyShopWebAutoScalingGroup:", compute);
-        Assert.Contains("LegacyShopWebTargetGroup:", compute);
-        Assert.Contains("LegacyShopWorkerDeploymentGroup:", compute);
-        Assert.Contains("Install-WindowsFeature Web-Server", compute);
-        Assert.Contains("codedeploy-agent.msi", compute);
-        Assert.Contains("/aws/service/ami-windows-latest/Windows_Server-2022-English-Full-Base", compute);
-        Assert.DoesNotContain("Senha@123", compute);
-        Assert.Contains("ManageMasterUserPassword: true", Read("infra/cloudformation/10-data.yaml"));
-        Assert.Contains("AWS::FSx::FileSystem", Read("infra/cloudformation/20-storage.yaml"));
-        Assert.Contains("appspec.yml", string.Join(",", Directory.GetFiles(Path.Combine(output, "infra", "codedeploy", "legacyshop-web"))));
-        Assert.Contains("New-Website", Read("infra/codedeploy/legacyshop-web/scripts/after-install.ps1"));
-        Assert.Contains("Get-SECSecretValue", Read("infra/codedeploy/legacyshop-web/scripts/after-install.ps1"));
-        Assert.Contains("New-Service -Name \"LegacyShopSincronizacao\"", Read("infra/codedeploy/legacyshop-worker/scripts/after-install.ps1"));
-        Assert.Contains("schtasks /Create", Read("infra/codedeploy/legacyshop-importador/scripts/after-install.ps1"));
+        Assert.False(Directory.Exists(Path.Combine(output, "infra", "cloudformation")));
+        foreach (var file in new[] { "service.yml", "service-worker.yml", "service-importador.yml", "service-relatorios.yml", "data.yml", "deploy.sh", "deploy.ps1", "README.md" })
+            Assert.True(Exists($"infra/{file}"), file);
+        foreach (var environment in new[] { "dev", "hom", "prod" })
+            foreach (var file in new[] { "parameters.json", "parameters-worker.json", "parameters-importador.json", "parameters-data.json" })
+                Assert.True(Exists($"infra/{environment}/{file}"), $"{environment}/{file}");
+        var service = Read("infra/service.yml");
+        Assert.Contains("FeatureName:", service);
+        Assert.Contains("AllowedPattern: \"[a-z]*\"", service);
+        Assert.Contains("AutoScalingGroup:", service);
+        Assert.Contains("TargetGroup:", service);
+        Assert.Contains("LoadBalancerListenerArn:", service);                    // shared ALB, VPC and subnets come as parameters
+        Assert.Contains("PrivateSubnetThree:", service);
+        Assert.Contains("DeploymentGroup:", service);
+        Assert.Contains("Install-WindowsFeature Web-Server", service);
+        Assert.Contains("codedeploy-agent.msi", service);
+        Assert.Contains("/aws/service/ami-windows-latest/Windows_Server-2022-English-Full-Base", service);
+        Assert.Contains("UrlsErpProtocoloUrl:", service);                        // hardcoded URL in AppConfig.cs became a stack parameter...
+        Assert.Contains("AWS::SSM::Parameter", service);                         // ...delivered through the Parameter Store
+        Assert.DoesNotContain("Senha@123", service);
+        Assert.DoesNotContain("erp-9f3b2c1d", service);
+        Assert.DoesNotContain("AWS::EC2::VPC\n", service);
+        var worker = Read("infra/service-worker.yml");
+        Assert.DoesNotContain("TargetGroup:", worker);
+        Assert.Contains("MaxCapacity:", worker);
+        var data = Read("infra/data.yml");
+        Assert.Contains("ManageMasterUserPassword: true", data);
+        Assert.Contains("AWS::FSx::FileSystem", data);
+        Assert.Contains("ArtifactsBucket:", data);
+        Assert.Contains("AWS::SecretsManager::Secret", data);
+        Assert.Contains("Name: \"legacyshop/legacyshop.web/AppSettings/Credenciais/TokenIntegracaoErp\"", data);
+        Assert.Contains("SecretString: \"PREENCHER\"", data);
+        Assert.DoesNotContain("erp-9f3b2c1d", data);
+        var prodParameters = Read("infra/prod/parameters.json");
+        Assert.Contains("\"Parameters\": {", prodParameters);
+        Assert.Contains("\"FeatureName\": \"legacyshop\"", prodParameters);
+        Assert.Contains("\"MicroServiceName\": \"web\"", prodParameters);
+        Assert.Contains("\"Environment\": \"prod\"", prodParameters);
+        Assert.Contains("\"UrlsErpProtocoloUrl\": \"https://erp.exemplo.com.br/api/protocolo\"", prodParameters);
+        Assert.Contains("\"ApiBaseUrl\": \"https://loja.exemplo.com.br/api\"", prodParameters);   // Web.Release.config value for prod
+        Assert.Contains("\"ApiBaseUrl\": \"http://localhost:51234/api\"", Read("infra/dev/parameters.json"));
+        Assert.Contains("appspec.yml", string.Join(",", Directory.GetFiles(Path.Combine(output, "infra", "codedeploy", "web"))));
+        var afterInstall = Read("infra/codedeploy/web/scripts/after-install.ps1");
+        Assert.Contains("New-Website", afterInstall);
+        Assert.Contains("Get-SSMParametersByPath", afterInstall);
+        Assert.Contains("Get-SECSecretValue", afterInstall);
+        Assert.Contains("'AppSettings:Credenciais:TokenIntegracaoErp' = 'legacyshop/legacyshop.web/AppSettings/Credenciais/TokenIntegracaoErp'", afterInstall);
+        Assert.Contains("New-Service -Name \"LegacyShopSincronizacao\"", Read("infra/codedeploy/worker/scripts/after-install.ps1"));
+        Assert.Contains("schtasks /Create", Read("infra/codedeploy/importador/scripts/after-install.ps1"));
         var workflow = Read(".github/workflows/deploy.yml");
         Assert.Contains("runs-on: windows-latest", workflow);
         Assert.Contains("microsoft/setup-msbuild@v2", workflow);
         Assert.Contains("aws deploy create-deployment", workflow);
+        Assert.Contains("file://$ENV/$parameters", Read("infra/deploy.sh"));
         Assert.Contains(result.GlobalItems, i => i.RuleId == "AWS-INFRA" && i.Title.Contains("CloudFormation"));
-        Assert.Contains("deploy.sh", string.Join(",", Directory.GetFiles(Path.Combine(output, "infra", "cloudformation"))));
+
+        // Code: fixed URL/e-mail/credentials left AppConfig.cs for the config (and the secrets plan); const became static readonly.
+        var appConfig = Read("LegacyShop.Web/Helpers/AppConfig.cs");
+        Assert.Contains("public static readonly string ErpProtocoloUrl = System.Configuration.ConfigurationManager.AppSettings[\"Urls:ErpProtocoloUrl\"];", appConfig);
+        Assert.Contains("AppSettings[\"Credenciais:TokenIntegracaoErp\"]", appConfig);
+        Assert.DoesNotContain("erp-9f3b2c1d", appConfig);
+        Assert.DoesNotContain("Senha@123", appConfig);
+        var webConfig = Read("LegacyShop.Web/Web.config");
+        Assert.Contains("<add key=\"Urls:ErpProtocoloUrl\" value=\"https://erp.exemplo.com.br/api/protocolo\" />", webConfig);
+        Assert.Contains("<add key=\"Credenciais:TokenIntegracaoErp\" value=\"&lt;secret: legacyshop/legacyshop.web/AppSettings/Credenciais/TokenIntegracaoErp&gt;\" />", webConfig);
+        Assert.Contains("erp-9f3b2c1d", Read("_secrets/LegacyShop.Web/secrets.template.json"));
+        Assert.Contains("<Reference Include=\"System.Configuration\" />", Read("LegacyShop.Web/LegacyShop.Web.csproj"));
+        Assert.Contains(web.Inventory, i => i.RuleId == "CS-CONFIG-EXTERNALIZED" && i.AutoMigrated);
+        Assert.Contains(web.Inventory, i => i.RuleId == "CS-SECRET-EXTERNALIZED" && i.AutoMigrated);
+        Assert.Contains(web.Settings, s => s.Key == "AppSettings:Urls:ErpProtocoloUrl" && s.Kind == SettingKind.Url && s.Source == SettingSource.Code);
+        Assert.Contains(web.Settings, s => s.Key == "AppSettings:ApiBaseUrl" && s.Source == SettingSource.Config && s.EnvironmentValues["Production"] == "https://loja.exemplo.com.br/api");
 
         // Reports say what this run is.
         var markdown = File.ReadAllText(Path.Combine(result.ReportDir!, "migration-report.md"));
@@ -144,31 +186,31 @@ public sealed class FrameworkTargetTests : IDisposable
     public async Task Net10_target_with_cloudformation_generates_ecs_and_lambda_stacks()
     {
         var output = Path.Combine(_work, "LegacyShop.net10");
-        var result = await new MigrationEngine().RunAsync(new MigrationOptions
-        {
-            InputPath = SampleSolution(), OutputDir = output, Offline = true, VerifyBuild = false, Iac = IacTool.CloudFormation
+        var result = await new MigrationEngine().RunAsync(new MigrationOptions { Target = MigrationTarget.Net10, InputPath = SampleSolution(), OutputDir = output, Offline = true, VerifyBuild = false, Iac = IacTool.CloudFormation, Serverless = true
         });
         string Read(string relative) => File.ReadAllText(Path.Combine(output, relative));
 
         Assert.False(Directory.Exists(Path.Combine(output, "infra", "terraform")));
         Assert.False(Directory.Exists(Path.Combine(output, "infra", "codedeploy")));
-        foreach (var stack in new[] { "00-network", "10-data", "20-storage", "30-compute", "40-lambda" })
-            Assert.True(File.Exists(Path.Combine(output, "infra", "cloudformation", stack + ".yaml")), stack);
-        var compute = Read("infra/cloudformation/30-compute.yaml");
-        Assert.Contains("LegacyShopWebService:", compute);                                   // web → ECS service behind the ALB
-        Assert.Contains("LegacyShopWorkerSchedule:", compute);                                // worker → EventBridge Scheduler task
-        Assert.Contains("AWS::Scheduler::Schedule", compute);
-        Assert.Contains("ValueFrom: !Sub \"arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:legacyshop/legacyshop.web/ConnectionStrings/RelatoriosConnection\"", compute);
-        Assert.DoesNotContain("Senha@123", compute);
-        Assert.DoesNotContain("legacyshop-relatorios", compute);                             // VB project is not converted
-        var lambda = Read("infra/cloudformation/40-lambda.yaml");
-        Assert.Contains("LegacyShopImportadorFunction:", lambda);
+        foreach (var file in new[] { "service.yml", "service-worker.yml", "lambda-importador.yml", "data.yml", "dev/parameters.json", "hom/parameters-worker.json", "prod/parameters-lambda-importador.json", "prod/parameters-data.json" })
+            Assert.True(File.Exists(Path.Combine(output, "infra", file)), file);
+        var service = Read("infra/service.yml");
+        Assert.Contains("ECSService:", service);                                              // web → ECS service behind the shared ALB
+        Assert.Contains("EcsClusterName:", service);
+        Assert.Contains("CpuArchitecture: !Ref CpuArchitecture", service);
+        Assert.Contains("ValueFrom: !Sub \"arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:legacyshop/legacyshop.web/ConnectionStrings/RelatoriosConnection\"", service);
+        Assert.Contains("- Name: AppSettings__Urls__ErpProtocoloUrl", service);               // externalized URL → environment variable from a stack parameter
+        Assert.DoesNotContain("Senha@123", service);
+        Assert.Contains("AWS::Scheduler::Schedule", Read("infra/service-worker.yml"));         // worker → scheduled task, Main() untouched
+        Assert.False(File.Exists(Path.Combine(output, "infra", "service-relatorios.yml")));   // VB project is not converted
+        var lambda = Read("infra/lambda-importador.yml");
         Assert.Contains("LegacyShop.Importador::LegacyShop.Importador.Function::FunctionHandler", lambda);
         Assert.Contains("FilesEventsQueueArn", lambda);                                       // files trigger
         Assert.Contains("AWS::SES::ReceiptRule", lambda);                                     // mailbox trigger (opt-in)
         Assert.Contains("MailboxSchedule:", lambda);                                          // polling while the mailbox stays on Exchange
-        Assert.Contains("QueueConfigurations:", Read("infra/cloudformation/20-storage.yaml"));
-        Assert.Contains("aws-actions/amazon-ecr-login@v2", Read(".github/workflows/deploy.yml"));
+        Assert.Contains("QueueConfigurations:", Read("infra/data.yml"));
+        Assert.Contains("\"MicroServiceName\": \"importador\"", Read("infra/prod/parameters-lambda-importador.json"));
+        Assert.Contains("docker buildx build --platform linux/arm64", Read(".github/workflows/deploy.yml"));
         Assert.Contains("dotnet lambda deploy-function", Read(".github/workflows/deploy.yml"));
         Assert.Contains("LegacyShop.Relatorios", Read("infra/README.md"));
         Assert.Equal(AwsHosting.Lambda, result.Projects[4].Hosting!.Primary);

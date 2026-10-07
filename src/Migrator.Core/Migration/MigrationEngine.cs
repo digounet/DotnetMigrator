@@ -104,6 +104,12 @@ public sealed class MigrationEngine
         progress?.Report("Alinhando versões de pacotes entre projetos...");
         var ordered = PackageAligner.TopologicalOrder(migrated);
         await PackageAligner.AlignAsync(ordered, nuget);
+        foreach (var project in migrated)
+        {
+            // What a deployable needs at runtime: its own settings plus those of every library it ships.
+            var all = project.Result.Settings.Concat(PackageAligner.Closure(project, ordered).SelectMany(c => c.Result.Settings)).DistinctBy(s => s.Key, StringComparer.OrdinalIgnoreCase);
+            project.Result.SettingsWithDependencies.AddRange(all);
+        }
         List<(ProjectResult Result, ApplicationProfile Profile)>? profiles = null;
         if (options.Cloud == CloudTarget.Aws)
         {
@@ -127,7 +133,7 @@ public sealed class MigrationEngine
                     ? new InventoryItem
                     {
                         Project = "(solução)", Severity = InventorySeverity.Info, Category = InventoryCategory.ProjectFile, RuleId = "AWS-INFRA",
-                        Title = $"Infraestrutura como código gerada: {files.Count(f => f.Key.EndsWith(".yaml", StringComparison.Ordinal) && f.Key.StartsWith(CloudFormationGenerator.Dir, StringComparison.Ordinal))} stacks CloudFormation + pipeline de deploy",
+                        Title = $"Infraestrutura como código gerada: {files.Count(f => (f.Key.EndsWith(".yaml", StringComparison.Ordinal) || f.Key.EndsWith(".yml", StringComparison.Ordinal)) && f.Key.StartsWith("infra/", StringComparison.Ordinal))} templates CloudFormation + pipeline de deploy",
                         Description = options.KeepsFramework
                             ? "infra/cloudformation/ (VPC, EC2 Windows em Auto Scaling, ALB, RDS, S3/FSx, IAM, CodeDeploy, alarmes), infra/codedeploy/ (appspec + scripts PowerShell por projeto) e .github/workflows/deploy.yml (MSBuild em runner Windows); infra/README.md traz a ordem de execução."
                             : "infra/cloudformation/ (VPC, ECS/ALB, tarefas agendadas, workers, Lambda, RDS, S3, IAM, alarmes) e .github/workflows/deploy.yml; infra/README.md traz a ordem de execução.",
@@ -333,7 +339,7 @@ public sealed class MigrationEngine
         {
             var closure = PackageAligner.Closure(project, ordered).ToList();
             var merged = project.Profile.MergeWith(closure.Select(c => c.Profile));
-            var hosting = AwsArchitect.Recommend(project.Result.Project, merged, result.Options.Target);
+            var hosting = AwsArchitect.Recommend(project.Result.Project, merged, result.Options.Target, result.Options.Serverless);
             project.Result.Hosting = hosting;
             profiles.Add((project.Result, merged));
 

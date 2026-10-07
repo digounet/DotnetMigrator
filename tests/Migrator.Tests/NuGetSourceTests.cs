@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using Migrator.Core.Migration;
 using Migrator.Core.Models;
 using Migrator.Core.NuGet;
@@ -153,7 +153,7 @@ public sealed class NuGetSourceTests : IDisposable
 
         // end to end through the engine: the copy on disk is the rewritten one
         var output = Path.Combine(_work, "out");
-        var result = await new MigrationEngine().RunAsync(new MigrationOptions { InputPath = csproj, OutputDir = output, Offline = true, VerifyBuild = false, Cloud = CloudTarget.None });
+        var result = await new MigrationEngine().RunAsync(new MigrationOptions { Target = MigrationTarget.Net10, InputPath = csproj, OutputDir = output, Offline = true, VerifyBuild = false, Cloud = CloudTarget.None });
         Assert.Contains("<TargetFramework>net10.0</TargetFramework>", File.ReadAllText(Path.Combine(output, "Lib.csproj")));
         Assert.Contains(result.Projects[0].Inventory, i => i.RuleId == "PRJ-MODERN" && i.Title.Contains("net48;net6.0 → net10.0"));
     }
@@ -174,9 +174,7 @@ public sealed class NuGetSourceTests : IDisposable
             </configuration>
             """);
         var output = Path.Combine(_work, "out2");
-        var result = await new MigrationEngine().RunAsync(new MigrationOptions
-        {
-            InputPath = sample, OutputDir = output, Offline = true, VerifyBuild = true, BuildTimeout = TimeSpan.FromMinutes(1), NuGetConfigPath = config, Cloud = CloudTarget.None, GenerateInfrastructure = false
+        var result = await new MigrationEngine().RunAsync(new MigrationOptions { Target = MigrationTarget.Net10, InputPath = sample, OutputDir = output, Offline = true, VerifyBuild = true, BuildTimeout = TimeSpan.FromMinutes(1), NuGetConfigPath = config, Cloud = CloudTarget.None, GenerateInfrastructure = false
         });
 
         Assert.Equal("artifactory (http://127.0.0.1:9/artifactory/api/nuget/v3/remote/index.json)", result.NuGetSource);

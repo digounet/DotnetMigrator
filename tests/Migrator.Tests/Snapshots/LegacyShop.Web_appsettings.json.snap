@@ -35,6 +35,16 @@
     "ApiBaseUrl": "http://localhost:51234/api",
     "ItensPorPagina": "20",
     "Smtp.From": "loja@exemplo.com.br",
-    "PagamentoApiKey": "<secret: legacyshop/legacyshop.web/AppSettings/PagamentoApiKey>"
+    "PagamentoApiKey": "<secret: legacyshop/legacyshop.web/AppSettings/PagamentoApiKey>",
+    "Urls": {
+      "ErpProtocoloUrl": "https://erp.exemplo.com.br/api/protocolo"
+    },
+    "Emails": {
+      "EmailSuporte": "suporte@exemplo.com.br"
+    },
+    "Credenciais": {
+      "TokenIntegracaoErp": "<secret: legacyshop/legacyshop.web/AppSettings/Credenciais/TokenIntegracaoErp>",
+      "ConexaoRelatoriosAntiga": "<secret: legacyshop/legacyshop.web/AppSettings/Credenciais/ConexaoRelatoriosAntiga>"
+    }
   }
 }

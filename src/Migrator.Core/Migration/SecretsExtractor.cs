@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -39,6 +39,12 @@ public static partial class SecretsExtractor
             config.EnvironmentJson[environment] = Scrub(config.EnvironmentJson[environment], prefix, environment, plan);
         return plan;
     }
+
+    /// <summary>A credential found in code (not in a config file): same naming as the config ones, so scripts and IaC treat it alike.</summary>
+    public static ExtractedSecret ForCode(string solutionName, string projectName, string configPath, string value) =>
+        new(configPath, configPath.Replace(":", "__"), $"{Slug(solutionName)}/{Slug(projectName)}/{configPath.Replace(':', '/')}", value, null);
+
+    public const string PlaceholderPrefix = "<secret: ";
 
     private static string Scrub(string json, string prefix, string? environment, SecretsPlan plan)
     {

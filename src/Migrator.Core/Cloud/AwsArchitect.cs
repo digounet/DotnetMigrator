@@ -34,7 +34,7 @@ public static partial class AwsArchitect
         [Signal.OfficeOleDb] = "provider OLE DB ACE/Jet (Excel/Access, só Windows 32/64 bits com o Access Database Engine)"
     };
 
-    public static HostingRecommendation Recommend(ProjectInfo project, ApplicationProfile profile)
+    public static HostingRecommendation Recommend(ProjectInfo project, ApplicationProfile profile, bool serverless = false)
     {
         var rec = new HostingRecommendation { Project = project.Name, Kind = project.Kind };
         foreach (var s in HardWindows.Where(profile.Has)) rec.HardWindowsDependencies.Add(Describe(profile, s));
@@ -115,7 +115,7 @@ public static partial class AwsArchitect
                 rec.Rationale.Add("Depende de componentes exclusivos do Windows: " + string.Join("; ", rec.HardWindowsDependencies) + ". Container Windows no ECS (ou EC2 Windows se precisar de sessão interativa).");
                 rec.Alternatives.Add("ECS Fargate (Linux) após remover as dependências Windows.");
             }
-            else if (eventDriven && !blocksLambda && small && !profile.Has(Signal.Scheduler))
+            else if (serverless && eventDriven && !blocksLambda && small && !profile.Has(Signal.Scheduler))
             {
                 // Typical back-office automation: reacts to files, e-mails or messages, runs to completion. Serverless is the cheapest and simplest fit.
                 rec.Primary = AwsHosting.Lambda;
@@ -139,11 +139,15 @@ public static partial class AwsArchitect
                 rec.Rationale.Add("Processo orientado a fila: um serviço ECS Fargate (Linux) consumindo Amazon SQS, com auto scaling pela profundidade da fila (métrica ApproximateNumberOfMessagesVisible).");
                 rec.Alternatives.Add("AWS Lambda com gatilho SQS — se cada mensagem for processada em menos de 15 min e sem dependências pesadas; elimina o container sempre ligado.");
             }
-            else if (scheduled)
+            else if (scheduled || (eventDriven && !serverless))
             {
                 rec.Primary = AwsHosting.EcsScheduledTask;
-                rec.Rationale.Add("Processo periódico (timer/agendador): Amazon EventBridge Scheduler dispara uma tarefa ECS Fargate (RunTask) no horário; a task termina ao concluir e não há custo entre execuções.");
-                if (eventDriven)
+                rec.Rationale.Add(scheduled
+                    ? "Processo periódico (timer/agendador): Amazon EventBridge Scheduler dispara uma tarefa ECS Fargate (RunTask) no horário; a task termina ao concluir e não há custo entre execuções."
+                    : "Automação de retaguarda executada por agendamento: Amazon EventBridge Scheduler dispara uma tarefa ECS Fargate (RunTask) com o Main() como está; a task termina ao concluir e não há custo entre execuções.");
+                if (eventDriven && !serverless && !blocksLambda && small && !profile.Has(Signal.Scheduler))
+                    rec.Rationale.Add("Lift-and-shift: o ponto de entrada não é reescrito. A automação reage a " + (fileDriven ? "arquivos" : mailboxDriven ? "e-mails" : "mensagens") + " e caberia em AWS Lambda; rode com --serverless para gerar o handler e os gatilhos (S3 Event Notifications, SES recebimento ou SQS).");
+                else if (eventDriven)
                     rec.Rationale.Add("A automação reage a " + (fileDriven ? "arquivos" : mailboxDriven ? "e-mails" : "mensagens") + ": em vez de agendar, dispare pelo evento (S3 Event Notifications, SES recebimento ou SQS) — " +
                         (!small ? "o tamanho do projeto" : !blocksLambda ? "o agendador embutido (Quartz/Hangfire)" : "as dependências Windows substituíveis") + " foi o que impediu recomendar Lambda diretamente.");
                 rec.Alternatives.Add("ECS Fargate como serviço contínuo (BackgroundService + PeriodicTimer) — mais simples de portar, paga 24x7 e precisa de lock distribuído se escalar.");

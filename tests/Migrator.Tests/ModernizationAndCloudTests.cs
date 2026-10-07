@@ -1,4 +1,4 @@
-using System.Xml.Linq;
+﻿using System.Xml.Linq;
 using Migrator.Core.Analysis;
 using Migrator.Core.Cloud;
 using Migrator.Core.Data;
@@ -380,7 +380,12 @@ public class ModernizationAndCloudTests
         Assert.True(profile.Has(Signal.MailboxReading));
         Assert.True(profile.Has(Signal.SpreadsheetFiles));
 
-        var rec = AwsArchitect.Recommend(console, profile);
+        // Lift-and-shift default: the Main() is kept and the task is scheduled; Lambda is pointed out as the serverless option.
+        var lift = AwsArchitect.Recommend(console, profile);
+        Assert.Equal(AwsHosting.EcsScheduledTask, lift.Primary);
+        Assert.Contains(lift.Rationale, r => r.Contains("--serverless"));
+
+        var rec = AwsArchitect.Recommend(console, profile, serverless: true);
         Assert.Equal(AwsHosting.Lambda, rec.Primary);                       // EventLog is tolerated: it must go anyway
         Assert.Contains(rec.Rationale, r => r.Contains("SES") && r.Contains("S3 Event Notifications"));
         Assert.Contains(rec.Prerequisites, p => p.Contains("handler Lambda"));
@@ -389,7 +394,7 @@ public class ModernizationAndCloudTests
 
         // Same automation with Quartz inside → scheduled ECS task, with a hint that the event trigger would be better
         var withQuartz = Project("Importador", ProjectKind.Console, "Microsoft.Exchange.WebServices", "CsvHelper", "Quartz");
-        var scheduled = AwsArchitect.Recommend(withQuartz, Profile(withQuartz, code + "\nclass J { Quartz.IScheduler s; }"));
+        var scheduled = AwsArchitect.Recommend(withQuartz, Profile(withQuartz, code + "\nclass J { Quartz.IScheduler s; }"), serverless: true);
         Assert.Equal(AwsHosting.EcsScheduledTask, scheduled.Primary);
         Assert.Contains(scheduled.Rationale, r => r.Contains("agendador embutido"));
 

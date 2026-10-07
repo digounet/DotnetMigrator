@@ -52,7 +52,7 @@ migrator migrate C:\src\MinhaApp\MinhaApp.sln   # gera C:\src\MinhaApp.net10 + r
 
 **Dados acessados (sempre):** o relatório lista, por banco, a tecnologia (SQL Server, Oracle...), as tabelas/procedures e os campos que o código acessa, com a operação (SELECT/INSERT/UPDATE/DELETE/EF), a forma de acesso (ADO.NET, Dapper, EF6/EF Core, EDMX, `.sql`) e o arquivo:linha. Veja [Dados acessados](#dados-acessados-bancos-tabelas-e-campos).
 
-**Sem migrar o código (`--target framework`):** quando a decisão é só sair do datacenter, a ferramenta copia os projetos como estão, eleva todos para .NET Framework 4.8.1 (última versão) e gera a infraestrutura de lift-and-shift em **CloudFormation** (EC2 Windows + CodeDeploy). O relatório mostra, lado a lado, a hospedagem de agora (EC2) e a que cada projeto teria após migrar para .NET 10 (ECS Fargate/Lambda). Veja [Destino .NET Framework 4.8.1](#destino-net-framework-481-sem-migrar-o-código).
+**Lift-and-shift é o padrão.** `migrator migrate App.sln` copia os projetos como estão, eleva todos para .NET Framework 4.8.1 (última versão), tira do código e dos configs o que não pode ficar fixo (URLs e e-mails viram parâmetros por ambiente; senhas e tokens viram referências ao Secrets Manager) e gera a infraestrutura EC2 Windows + CodeDeploy em **CloudFormation**, no layout da plataforma (`infra/service.yml` + `infra/{dev,hom,prod}/parameters.json`). A migração de código para .NET 10 (ECS Fargate) é a opção `--target net10`, e Lambda só com `--serverless`. Veja [Destino .NET Framework 4.8.1](#destino-net-framework-481-o-padrão-sem-migrar-o-código) e [Infraestrutura como código](#infraestrutura-como-código-e-cicd).
 
 **Como testei:**
 
@@ -343,17 +343,34 @@ O banco de cada tabela é resolvido nesta ordem: nome de três partes no SQL →
 
 ---
 
-## Destino .NET Framework 4.8.1 (sem migrar o código)
+## Destino .NET Framework 4.8.1 (o padrão, sem migrar o código)
 
-`migrator migrate App.sln --target framework` serve para o caso em que a decisão é tirar a aplicação do datacenter **agora**, sem reescrever nada:
+`migrator migrate App.sln` (ou `--target framework`, o padrão) serve para o caso em que a decisão é tirar a aplicação do datacenter **agora**, sem reescrever nada. A migração de código para .NET 10 é `--target net10`.
 
 - **Código intocado.** Cada projeto é copiado como está (C# e VB.NET, old-style ou SDK); só o `TargetFrameworkVersion` sobe para `v4.8.1` (`net481` em SDK-style) e os marcadores de runtime dos configs (`supportedRuntime`, `httpRuntime`/`compilation targetFramework`) acompanham. `packages.config`, `Global.asax`, Web Forms, `ServiceBase`, tudo permanece; o `.sln` original é copiado. A saída padrão é `<nome>.net481`. Itens: `PRJ-FX-UPGRADE`, `CFG-FX-RUNTIME`, `CFG-FX-SECRETS` (senhas continuam no config: o CodeDeploy as injeta), `WEB-WEBFORMS-KEPT`, `BUILD-FX-SKIPPED` (o build de verificação exige MSBuild no Windows; o workflow gerado faz isso).
 - **Análise completa.** Perfil, inventário de dados acessados, sugestões de modernização (sem os itens `MOD-CS-*`/`MOD-WIN-*`, que só valem para .NET 10/Linux) e arquitetura rodam normalmente sobre o código original.
 - **Hospedagem: EC2 Windows** para todo projeto publicável (IIS para web, serviço Windows, Agendador de Tarefas para consoles), com a justificativa, os pré-requisitos do lift-and-shift (health check para o ALB, `machineKey`, sessão InProc, pastas de rede → FSx/File Gateway, segredos, Integrated Security → AD, EWS em desligamento) e, na coluna "Alternativas", **a hospedagem que o mesmo projeto teria após migrar para .NET 10** (ECS Fargate, Lambda...). Assim o relatório não contradiz a análise da trilha .NET 10: são duas respostas para duas decisões.
 - **Serviços**: EC2 + Auto Scaling, ALB, RDS, FSx for Windows (pastas UNC) / S3 via File Gateway, Managed AD quando há identidade Windows, Secrets Manager, Systems Manager, CloudWatch agent, CodeDeploy, AWS Backup, VPN. Fases, riscos (licença Windows, 4.x → 4.8.1, EWS, MSMQ local, sessão) e custo seguem o mesmo formato.
-- **Infraestrutura em CloudFormation** (padrão neste destino): veja a seção seguinte.
+- **Proteção mínima obrigatória**: credenciais fixas no código e nos configs saem para `_secrets/` e para o Secrets Manager (veja a seção seguinte); o restante do código não muda.
+- **Infraestrutura em CloudFormation** no layout da plataforma: veja [Infraestrutura como código](#infraestrutura-como-código-e-cicd).
 
-O caminho recomendado continua sendo migrar para .NET 10; o destino framework é a primeira etapa quando o prazo manda, e a última fase do plano gerado é justamente rodar o Migrator de novo sem `--target framework`.
+A modernização para .NET 10 continua disponível (`--target net10`) e a última fase do plano gerado é justamente rodar o Migrator de novo com ela.
+
+---
+
+## URLs, e-mails e credenciais fixos viram configuração
+
+Em qualquer destino, antes de qualquer outra reescrita, `Migration/LiteralExternalizer` troca literais C# por leitura de configuração:
+
+| Literal | Vira | Onde fica o valor |
+|---|---|---|
+| `"https://erp.exemplo.com.br/api"` | `ConfigurationManager.AppSettings["Urls:ErpProtocoloUrl"]` (no .NET 10 o pipeline transforma em `configuration["AppSettings:Urls:ErpProtocoloUrl"]`) | `app/web.config` ou `appsettings.json` **e** um parâmetro da infra por ambiente |
+| `"suporte@exemplo.com.br"` | `AppSettings["Emails:EmailSuporte"]` | idem |
+| `const string Token = "erp-9f3b..."`, connection string com `Password=`, `AKIA...` | `AppSettings["Credenciais:Token"]` com marcador `<secret: nome>` no config | valor real em `_secrets/<projeto>/` (fora do git), nome no Secrets Manager, referência na infra |
+
+A chave vem do identificador atribuído (`ErpProtocoloUrl`), senão do host/parte local do e-mail; `const` vira `static readonly`. Literais em atributos, `case`, valores padrão de parâmetro e strings interpoladas/verbatim não são reescritos e aparecem em `CS-CONFIG-SKIPPED`. Itens: `CS-CONFIG-EXTERNALIZED`, `CS-SECRET-EXTERNALIZED`. No destino framework o `.csproj` ganha a referência a `System.Configuration` quando falta.
+
+Os `appSettings` com URL/e-mail também viram parâmetros, com o valor por ambiente que os `Web.Debug.config`/`Web.Release.config` já declaravam (`ConfigSettingsCollector`). Na infra: parâmetros do template com um valor por ambiente em `infra/<env>/parameters.json`; o EC2 recebe pelo Parameter Store (`/<feature>/<env>/...`, gravado no appSettings pelo `after-install.ps1` do CodeDeploy), o ECS/Lambda por variável de ambiente `AppSettings__Secao__Chave`. Segredos nunca passam por template ou parâmetro: `data.yml` cria os nomes (`SecretString: PREENCHER`) e `_secrets/<projeto>/create-secrets.sh` coloca os valores.
 
 ---
 
@@ -381,7 +398,7 @@ Para cada projeto publicável a ferramenta recomenda **onde rodar** e por quê, 
 |---|---|---|
 | Web (MVC/Web API) | **ECS Fargate (Linux) atrás de um ALB** — padrão de menor operação para um portfólio | Dependência dura de Windows (COM, Registro, Office Interop, Crystal, WMI, P/Invoke) → **containers Windows no ECS**; IIS em código → **EC2 Windows**. API sem views/sessão → alternativa **Lambda**; app interna simples → alternativa **App Runner** |
 | **Automação orientada a evento** (console/serviço que lê pasta ou caixa de e-mail, processa planilhas/CSV, consome fila e grava no banco), sem dependências Windows e com até 25 arquivos de código | **AWS Lambda**, com o gatilho certo: arquivos → S3 Event Notifications → SQS (pastas de rede viram bucket via Storage Gateway File Gateway; parceiros via Transfer Family); e-mail → Amazon SES recebimento → S3 (ou EventBridge → Lambda consultando Microsoft Graph/IMAP); fila → SQS | Quartz/Hangfire embutido, projeto grande ou dependência Windows substituível → **tarefa ECS agendada**, com a dica de trocar o agendamento pelo evento |
-| Windows Service / console com timer ou Quartz/Hangfire | **tarefa ECS Fargate agendada pelo EventBridge Scheduler** (paga só a execução) | alternativa Lambda se < 15 min |
+| Windows Service / console com timer ou Quartz/Hangfire, e automações orientadas a evento (pasta, caixa de e-mail) sem `--serverless` | **tarefa ECS Fargate agendada pelo EventBridge Scheduler** (paga só a execução; o `Main()` fica como está) | `--serverless` → Lambda (veja a linha acima) |
 | Windows Service consumindo fila (MSMQ/RabbitMQ/MassTransit) | **worker ECS Fargate consumindo SQS**, escalado pela profundidade da fila | alternativa Lambda com gatilho SQS |
 | Biblioteca / testes | não publicável (empacotada nos consumidores / roda no CI) | — |
 | Desktop | fora da AWS (ou AppStream 2.0) | — |
@@ -578,24 +595,26 @@ Princípios: um template por aplicação, parametrizado por variáveis (`terrafo
 
 O código gerado para o sample passa em `terraform fmt -check`, `terraform init` e `terraform validate` (provider AWS 6.x). Projetos não convertidos (VB.NET) e os recomendados para EC2 Windows não geram recursos; o README da infra diz por quê. `--no-infra` desliga a geração.
 
-**CloudFormation** (`--iac cloudformation`, padrão para `--target framework`), em `Cloud/CloudFormationGenerator`:
+**CloudFormation** (`--iac cloudformation`, padrão para o destino framework), em `Cloud/CloudFormationGenerator`, segue o layout da plataforma do portfólio: um template por serviço, com a infraestrutura compartilhada (VPC, subnets, cluster, roles, listener do ALB) chegando como parâmetros, e uma pasta por ambiente:
 
 ```
-infra/cloudformation/00-network.yaml     VPC, subnets, NAT, VPC endpoints (exports <app>-<env>-VpcId, -PrivateSubnets...)
-infra/cloudformation/10-data.yaml        RDS com senha master no Secrets Manager; a porta é liberada pela stack de compute
-infra/cloudformation/20-storage.yaml     S3 privado/versionado; fila de eventos do bucket (Lambda); FSx for Windows (framework + pastas UNC)
-infra/cloudformation/30-compute.yaml     .NET 10: cluster ECS, ECR, ALB, serviços web, tarefas agendadas (Scheduler), workers com SQS, alarmes
-                                         framework: IAM, ALB, launch templates (user data instala IIS/.NET 4.8.1/CodeDeploy/CloudWatch agent),
-                                         Auto Scaling groups por projeto, CodeDeploy (app + deployment group), bucket de artefatos, alarmes
-infra/cloudformation/40-lambda.yaml      funções .NET, DLQ, gatilho pela fila de eventos do S3, agendamento para caixa postal, SES recebimento opcional
-infra/cloudformation/parameters/*.json   parâmetros por stack (nada é segredo);  deploy.sh / deploy.ps1 criam as stacks na ordem
-infra/codedeploy/<projeto>/              (framework) appspec.yml + before-install / after-install / application-start / validate-service.ps1:
-                                         IIS site e app pool, serviço Windows (New-Service) ou tarefa agendada (schtasks); o after-install lê o
-                                         segredo <app>/<projeto>/config no Secrets Manager e grava no web.config/app.config da instância
-.github/workflows/deploy.yml             .NET 10: o mesmo workflow do Terraform;  framework: runner Windows com MSBuild → zip → CodeDeploy
+infra/service.yml                 1º projeto publicável; os demais em service-<microservico>.yml
+                                  framework: launch template (user data instala IIS/.NET 4.8.1/CodeDeploy/CloudWatch agent),
+                                             Auto Scaling group, target group + regra no ALB compartilhado, CodeDeploy, Parameter Store,
+                                             log group, filtro de métrica e alarmes
+                                  net10:     log group, filtro/alarme, security group, task definition (Fargate, ARM64), service,
+                                             auto scaling; tarefa agendada (Scheduler) ou worker com SQS conforme a hospedagem
+infra/lambda-<microservico>.yml   só com --serverless: função, DLQ, gatilhos (fila de eventos do S3, agendamento da caixa postal, SES opcional)
+infra/data.yml                    o que é da aplicação: RDS, bucket S3 (+ fila de eventos), filas dos workers, FSx for Windows (framework + pastas UNC),
+                                  bucket de artefatos do CodeDeploy (framework), nomes dos segredos; exportado para os serviços
+infra/{dev,hom,prod}/parameters*.json   {"Parameters": {...}} por template e ambiente: VPC, subnets, roles, tamanhos, hosts e os
+                                  parâmetros de aplicação (URLs/e-mails) com o valor de cada ambiente; nada é segredo
+infra/deploy.sh / deploy.ps1      aws cloudformation deploy na ordem (data → serviços → lambdas) com a pasta do ambiente
+infra/codedeploy/<microservico>/  (framework) appspec.yml + before-install / after-install / application-start / validate-service.ps1
+.github/workflows/deploy.yml      framework: MSBuild em runner Windows → zip → CodeDeploy;  net10: buildx linux/arm64 → ECR → update-service
 ```
 
-As stacks são independentes e ligadas por exports, para que cada time aplique só a sua. Os templates gerados para o sample (nos dois destinos) passam limpos no `cfn-lint`; revalide com ele após mudar o gerador.
+Convenções do template: `FeatureName` (solução, só letras) e `MicroServiceName` (projeto sem o prefixo da solução, só letras) com `AllowedPattern "[a-z]*"`, `DevToolsAccount`, `Projeto`/`Negocio`, `Environment` (dev/hom/prod), `EcsClusterName` padrão `ecs-cluster-<feature>-fargate`, alarmes no tópico `{{resolve:ssm:/org/member/workload_local_sns_arn:1}}`. Os templates gerados para o sample (nos dois destinos) passam limpos no `cfn-lint`; revalide com ele após mudar o gerador.
 
 ---
 
@@ -761,9 +780,9 @@ dotnet run --project src/Migrator.Cli -- migrate samples\LegacyShop\LegacyShop.s
 ## Referência da linha de comando
 
 ```
-migrator analyze <entrada> [--report <pasta>] [--offline] [--nuget-config <arquivo>] [--nuget-source <url>] [--cloud aws|none] [--target net10|framework] [--llm none|ollama] [--llm-model <m>] [--llm-endpoint <url>] [--llm-timeout <min>] [--llm-no-cache]
-migrator portfolio <pasta> [--report <pasta>] [--offline] [--cloud aws|none] [--target net10|framework] [--baseline <portfolio.json>] [--llm ...]
-migrator migrate <entrada> [--output <pasta>] [--report <pasta>] [--offline] [--cloud aws|none] [--target net10|framework] [--iac terraform|cloudformation]
+migrator analyze <entrada> [--report <pasta>] [--offline] [--nuget-config <arquivo>] [--nuget-source <url>] [--cloud aws|none] [--target framework|net10] [--serverless] [--llm none|ollama] [--llm-model <m>] [--llm-endpoint <url>] [--llm-timeout <min>] [--llm-no-cache]
+migrator portfolio <pasta> [--report <pasta>] [--offline] [--cloud aws|none] [--target framework|net10] [--serverless] [--baseline <portfolio.json>] [--llm ...]
+migrator migrate <entrada> [--output <pasta>] [--report <pasta>] [--offline] [--cloud aws|none] [--target framework|net10] [--serverless] [--iac cloudformation|terraform]
                  [--force] [--no-build] [--build-timeout <min>] [--no-tests] [--no-smoke] [--verify-docker] [--keep-secrets] [--no-infra]
                  [--llm none|ollama] [--llm-model <m>] [--llm-endpoint <url>] [--llm-rounds <n>] [--llm-timeout <min>] [--llm-no-cache]
 ```
@@ -771,14 +790,15 @@ migrator migrate <entrada> [--output <pasta>] [--report <pasta>] [--offline] [--
 | Opção | Comando | Descrição |
 |---|---|---|
 | `<entrada>` | ambos | `.sln`, `.slnx`, `.csproj` ou pasta com projetos |
-| `--output`, `-o` | migrate | Pasta de saída (padrão: `<pasta-pai>\<nome-da-solução>.net10`) |
+| `--output`, `-o` | migrate | Pasta de saída (padrão: `<pasta-pai>\<nome-da-solução>.net481`; `.net10` com `--target net10`) |
 | `--report`, `-r` | ambos | Pasta dos relatórios (padrão: `<saída>\_migration-report` no migrate; `<pasta-pai>\<nome>.migration-report` no analyze) |
 | `--offline` | todos | Não consulta o feed NuGet (compatibilidade não verificada) |
 | `--nuget-config` | todos | `nuget.config` do feed privado; copiado para a raiz da saída e usado na compatibilidade e no restore (alternativa: `MIGRATOR_NUGET_CONFIG`) |
 | `--nuget-source` | todos | URL do service index v3 do feed; gera um `nuget.config` mínimo se não houver |
 | `--cloud` | ambos | Nuvem de destino da proposta de arquitetura e dos Dockerfiles: `aws` (padrão) ou `none` |
-| `--target` | todos | `net10` (padrão: reescreve o código) ou `framework` (código intocado em .NET Framework 4.8.1, EC2 Windows, CloudFormation); veja [Destino .NET Framework 4.8.1](#destino-net-framework-481-sem-migrar-o-código) |
-| `--iac` | migrate | `terraform` ou `cloudformation` (padrão: Terraform para `net10`, CloudFormation para `framework`) |
+| `--target` | todos | `framework` (padrão: lift-and-shift, código intocado em .NET Framework 4.8.1, EC2 Windows) ou `net10` (reescreve o código, ECS Fargate); veja [Destino .NET Framework 4.8.1](#destino-net-framework-481-o-padrão-sem-migrar-o-código) |
+| `--serverless` | todos | Recomenda Lambda (e gera handler/gatilhos) para automações orientadas a evento; sem a opção elas ficam em tarefa ECS agendada com o `Main()` intacto |
+| `--iac` | migrate | `cloudformation` (padrão para `framework`; layout `infra/service.yml` + `infra/<env>/parameters.json`) ou `terraform` (padrão para `net10`) |
 | `--llm` | ambos | Assistência por LLM: `none` (padrão) ou `ollama`; veja [Assistência por LLM](#assistência-por-llm-opcional) |
 | `--llm-model`, `--llm-endpoint` | ambos | Modelo e endpoint do provedor |
 | `--llm-rounds` | migrate | Rodadas build → correção → build (padrão 3) |

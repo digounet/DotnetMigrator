@@ -27,6 +27,36 @@ public static partial class ProjectMigrator
         result.Modernizations.AddRange(ModernizationAdvisor.Analyze(project, profile, sources, ctx.Cloud)
             .Where(m => !m.RuleId.StartsWith("MOD-CS-", StringComparison.Ordinal) && !m.RuleId.StartsWith("MOD-WIN-", StringComparison.Ordinal)));
         result.DataScan = DataAccessAnalyzer.Scan(project, sources.Concat(DataFiles(project)));
+        result.Settings.AddRange(ConfigSettingsCollector.Collect(project, LoadConfig(project)));
+
+        // Fixed URLs/e-mails/credentials in C# literals → ConfigurationManager.AppSettings[...] (valid on .NET Framework); keys go to the config below.
+        var session = new LiteralExternalizer.Session();
+        var rewrittenSources = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (!project.IsVisualBasic)
+            foreach (var file in project.SourceFiles.Where(f => File.Exists(f.FullPath) && f.IsInside(project.ProjectDir)))
+            {
+                var (text, _) = TextFiles.Read(file.FullPath);
+                var externalized = LiteralExternalizer.Externalize(text, Path.GetRelativePath(project.ProjectDir, file.FullPath).Replace('\\', '/'), session);
+                if (externalized != text) rewrittenSources[file.FullPath] = externalized;
+            }
+        ReportExternalized(project, session, result, ctx);
+        var codeSecrets = new SecretsPlan();
+        var configAdditions = new List<(string Key, string Value)>();
+        foreach (var literal in session.Literals.Where(l => l.Rewritten).DistinctBy(l => l.Key))
+        {
+            if (literal.Kind == SettingKind.Secret && !ctx.KeepSecrets)
+            {
+                var secret = SecretsExtractor.ForCode(ctx.SolutionName, project.Name, LiteralExternalizer.ConfigPath(literal.Key), literal.Value);
+                codeSecrets.Secrets.Add(secret);
+                configAdditions.Add((literal.Key, $"{SecretsExtractor.PlaceholderPrefix}{secret.SecretName}>"));
+            }
+            else configAdditions.Add((literal.Key, literal.Value));
+        }
+        if (codeSecrets.Any)
+        {
+            result.Secrets = codeSecrets;
+            WriteSecretsArtifacts(project, codeSecrets, plan, result.RelativeDir, items);
+        }
         if (project.Kind == ProjectKind.Web)
         {
             var markup = project.Items.Select(i => Path.GetRelativePath(project.ProjectDir, i.FullPath)).Where(r => WebFormsMarkup.Contains(Path.GetExtension(r))).ToList();
@@ -48,7 +78,8 @@ public static partial class ProjectMigrator
         {
             if (rewritten.Contains(file)) continue;
             if (Path.GetExtension(file).ToLowerInvariant() is ".user" or ".suo" or ".vspscc" or ".vssscc") continue;
-            plan.Copy(file, Path.Combine(result.RelativeDir, Path.GetRelativePath(project.ProjectDir, file)));
+            if (rewrittenSources.TryGetValue(file, out var text)) plan.Write(Path.Combine(result.RelativeDir, Path.GetRelativePath(project.ProjectDir, file)), text);
+            else plan.Copy(file, Path.Combine(result.RelativeDir, Path.GetRelativePath(project.ProjectDir, file)));
         }
         // Linked files and local DLLs living elsewhere inside the solution keep their relative paths.
         var root = ctx.RootDir.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
@@ -60,6 +91,7 @@ public static partial class ProjectMigrator
 
         var (projectText, _) = TextFiles.Read(project.ProjectPath);
         var (upgraded, before) = FrameworkProjectRewriter.Rewrite(projectText, project.IsSdkStyle);
+        if (rewrittenSources.Count > 0) upgraded = EnsureSystemConfigurationReference(upgraded, project.IsSdkStyle);
         plan.Write(result.OutputProjectPath, upgraded);
         if (project.IsAlreadyModern)
             items.Add(Item(project, InventorySeverity.Warning, InventoryCategory.ProjectFile, "PRJ-FX-MODERN",
@@ -75,10 +107,17 @@ public static partial class ProjectMigrator
                 "Apenas o TargetFrameworkVersion foi atualizado; packages.config, referências e arquivos permanecem como no original. O .NET Framework 4.8.1 é compatível em binário com as versões 4.x anteriores.",
                 "Compile com MSBuild/Visual Studio (o build de verificação com 'dotnet build' não se aplica a projetos .NET Framework). Confira avisos de pacotes que exigem versão mínima do framework e comportamentos que mudaram desde a versão de origem (TLS 1.2 padrão, criptografia, Regex).", auto: true));
 
+        if (configAdditions.Count > 0 && project.ConfigFilePath == null)
+        {
+            // No config file at all: create a minimal one next to the project so the keys exist (web.config for web, app.config otherwise).
+            var name = project.Kind == ProjectKind.Web ? "web.config" : "app.config";
+            plan.Write(Path.Combine(result.RelativeDir, name), AddAppSettings("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<configuration>\n</configuration>\n", configAdditions));
+        }
         foreach (var config in configFiles)
         {
             var (text, _) = TextFiles.Read(config);
             var (updated, changed) = FrameworkProjectRewriter.RewriteConfig(text);
+            if (config.Equals(project.ConfigFilePath, StringComparison.OrdinalIgnoreCase)) updated = AddAppSettings(updated, configAdditions);
             plan.Write(Path.Combine(result.RelativeDir, Path.GetRelativePath(project.ProjectDir, config)), updated);
             if (changed.Count > 0)
                 items.Add(Item(project, InventorySeverity.Info, InventoryCategory.Configuration, "CFG-FX-RUNTIME",

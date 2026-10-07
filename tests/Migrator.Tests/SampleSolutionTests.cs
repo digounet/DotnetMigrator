@@ -22,9 +22,7 @@ public sealed class SampleSolutionTests : IDisposable
     {
         var reportDir = Path.Combine(_work, "report");
 
-        var result = await new MigrationEngine().RunAsync(new MigrationOptions
-        {
-            InputPath = SampleSolution(), DryRun = true, Offline = true, ReportDir = reportDir
+        var result = await new MigrationEngine().RunAsync(new MigrationOptions { Target = MigrationTarget.Net10, InputPath = SampleSolution(), DryRun = true, Offline = true, ReportDir = reportDir, Serverless = true
         });
 
         Assert.Equal(["LegacyShop.Web", "LegacyShop.Core", "LegacyShop.Worker", "LegacyShop.Tests", "LegacyShop.Importador", "LegacyShop.Relatorios"], result.Projects.Select(p => p.Project.Name));
@@ -141,9 +139,7 @@ public sealed class SampleSolutionTests : IDisposable
     [Fact]
     public async Task Cloud_none_disables_architecture_and_cloud_items()
     {
-        var result = await new MigrationEngine().RunAsync(new MigrationOptions
-        {
-            InputPath = SampleSolution(), DryRun = true, Offline = true, ReportDir = Path.Combine(_work, "report-none"), Cloud = CloudTarget.None
+        var result = await new MigrationEngine().RunAsync(new MigrationOptions { Target = MigrationTarget.Net10, InputPath = SampleSolution(), DryRun = true, Offline = true, ReportDir = Path.Combine(_work, "report-none"), Cloud = CloudTarget.None
         });
         Assert.Null(result.Architecture);
         Assert.All(result.Projects, p => Assert.Null(p.Hosting));
@@ -157,9 +153,7 @@ public sealed class SampleSolutionTests : IDisposable
     {
         var output = Path.Combine(_work, "LegacyShop.net10");
 
-        var result = await new MigrationEngine().RunAsync(new MigrationOptions
-        {
-            InputPath = SampleSolution(), OutputDir = output, Offline = true, VerifyBuild = false
+        var result = await new MigrationEngine().RunAsync(new MigrationOptions { Target = MigrationTarget.Net10, InputPath = SampleSolution(), OutputDir = output, Offline = true, VerifyBuild = false, Serverless = true
         });
 
         string Read(string relative) => File.ReadAllText(Path.Combine(output, relative));
@@ -202,6 +196,18 @@ public sealed class SampleSolutionTests : IDisposable
         Assert.Contains(result.Projects[0].Inventory, i => i.RuleId == "CFG-SECRETS-EXTRACTED" && i.AutoMigrated);
         Assert.DoesNotContain(result.Projects[0].Inventory, i => i.RuleId == "CFG-SECRETS");
         Assert.Contains("<script src=\"~/Scripts/jquery-3.4.1.js\" asp-append-version=\"true\"></script>", Read("LegacyShop.Web/Views/Shared/_Layout.cshtml"));
+
+        // Fixed URL/e-mail/credentials in AppConfig.cs became configuration reads (.NET 10 path: configuration[...]) + appsettings keys / secrets
+        var appConfig = Read("LegacyShop.Web/Helpers/AppConfig.cs");
+        Assert.Contains("public static readonly string ErpProtocoloUrl = configuration[\"AppSettings:Urls:ErpProtocoloUrl\"];", appConfig);
+        Assert.Contains("configuration[\"AppSettings:Credenciais:TokenIntegracaoErp\"]", appConfig);
+        Assert.DoesNotContain("erp-9f3b2c1d", appConfig);
+        Assert.Contains("\"ErpProtocoloUrl\": \"https://erp.exemplo.com.br/api/protocolo\"", appsettings);
+        Assert.Contains("\"TokenIntegracaoErp\": \"<secret: legacyshop/legacyshop.web/AppSettings/Credenciais/TokenIntegracaoErp>\"", appsettings);
+        Assert.Contains("erp-9f3b2c1d", Read("_secrets/LegacyShop.Web/secrets.template.json"));
+        Assert.Contains(result.Projects[0].Inventory, i => i.RuleId == "CS-SECRET-EXTERNALIZED");
+        Assert.Contains("app_settings", Read("infra/terraform/variables.tf"));
+        Assert.Contains("AppSettings__Urls__ErpProtocoloUrl", Read("infra/terraform/variables.tf"));
 
         var core = Read("LegacyShop.Core/LegacyShop.Core.csproj");
         Assert.Contains("<Compile Include=\"..\\Shared\\VersaoInfo.cs\" Link=\"Properties\\VersaoInfo.cs\" />", core);
@@ -262,9 +268,7 @@ public sealed class SampleSolutionTests : IDisposable
         var sample = SampleSolution();
         var inside = Path.Combine(Path.GetDirectoryName(sample)!, "out");
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => new MigrationEngine().RunAsync(new MigrationOptions
-        {
-            InputPath = sample, OutputDir = inside, Offline = true, VerifyBuild = false
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => new MigrationEngine().RunAsync(new MigrationOptions { Target = MigrationTarget.Net10, InputPath = sample, OutputDir = inside, Offline = true, VerifyBuild = false
         }));
 
         Assert.Contains("não pode ficar dentro", ex.Message);

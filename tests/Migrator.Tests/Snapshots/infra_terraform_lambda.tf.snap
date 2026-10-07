@@ -19,12 +19,12 @@ resource "aws_lambda_function" "legacyshop_importador" {
     security_group_ids = [aws_security_group.tasks.id]
   }
   environment {
-    variables = {
+    variables = merge({
       DOTNET_ENVIRONMENT = "Production"
       # Segredos: leia em tempo de execução pelo nome (AWSSDK.SecretsManager) ou carregue no IConfiguration com Amazon.Extensions.Configuration.SystemsManager.
       SECRET_CONNECTIONSTRINGS__DEFAULTCONNECTION = "legacyshop/legacyshop.importador/ConnectionStrings/DefaultConnection"
       SECRET_APPSETTINGS__CAIXAPOSTALSENHA        = "legacyshop/legacyshop.importador/AppSettings/CaixaPostalSenha"
-    }
+    }, var.app_settings)
   }
   depends_on = [aws_cloudwatch_log_group.legacyshop_importador]
 }
