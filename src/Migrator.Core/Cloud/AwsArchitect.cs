@@ -34,7 +34,7 @@ public static partial class AwsArchitect
         [Signal.OfficeOleDb] = "provider OLE DB ACE/Jet (Excel/Access, só Windows 32/64 bits com o Access Database Engine)"
     };
 
-    public static HostingRecommendation Recommend(ProjectInfo project, ApplicationProfile profile, bool serverless = false)
+    public static HostingRecommendation Recommend(ProjectInfo project, ApplicationProfile profile, bool serverless = false, bool platformWorkers = false)
     {
         var rec = new HostingRecommendation { Project = project.Name, Kind = project.Kind };
         foreach (var s in HardWindows.Where(profile.Has)) rec.HardWindowsDependencies.Add(Describe(profile, s));
@@ -114,6 +114,14 @@ public static partial class AwsArchitect
                 rec.Primary = AwsHosting.EcsWindows;
                 rec.Rationale.Add("Depende de componentes exclusivos do Windows: " + string.Join("; ", rec.HardWindowsDependencies) + ". Container Windows no ECS (ou EC2 Windows se precisar de sessão interativa).");
                 rec.Alternatives.Add("ECS Fargate (Linux) após remover as dependências Windows.");
+            }
+            else if (platformWorkers && !queueDriven)
+            {
+                // The platform's Terraform module for automations is an ECS service (worker): the container stays up, answers /health and runs the cycle on an interval.
+                rec.Primary = AwsHosting.EcsFargateWorker;
+                rec.Rationale.Add("Padrão da plataforma (--iac terraform-platform): automações rodam como worker ECS Fargate (Linux, ARM64) de longa duração pelo módulo worker; o console vira um BackgroundService que repete o ciclo a cada Worker:IntervalMinutes e expõe /health para o health check do ECS/Datadog.");
+                rec.Alternatives.Add("Tarefa ECS agendada pelo EventBridge Scheduler — mantém o Main() como está, mas não usa o módulo worker da plataforma.");
+                rec.Prerequisites.Add("Ciclos não podem se sobrepor: com mais de uma task (auto scaling) o mesmo e-mail/arquivo pode ser processado duas vezes; mantenha service_max_capacity = 1 ou implemente lock distribuído.");
             }
             else if (serverless && eventDriven && !blocksLambda && small && !profile.Has(Signal.Scheduler))
             {

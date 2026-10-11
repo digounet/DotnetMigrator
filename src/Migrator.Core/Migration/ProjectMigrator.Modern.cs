@@ -58,11 +58,17 @@ public static partial class ProjectMigrator
                 "Acrescente as chaves ao appsettings.json dos projetos executáveis que referenciam esta biblioteca (os parâmetros da infraestrutura já incluem os valores por ambiente)."));
         }
 
-        // The scrubbed appsettings*.json replace the copied originals (writes are applied after copies).
+        // The scrubbed config files replace the copied originals (writes are applied after copies); untouched ones stay as copied.
         if (files != null || config.AppSettingsJson != null)
         {
-            if (config.AppSettingsJson != null) plan.Write(Path.Combine(result.RelativeDir, files?.BaseFile ?? "appsettings.json"), config.AppSettingsJson);
-            foreach (var (environment, json) in config.EnvironmentJson) plan.Write(Path.Combine(result.RelativeDir, $"appsettings.{environment}.json"), json);
+            void WriteIfChanged(string relative, string json)
+            {
+                if (files != null && files.Originals.TryGetValue(relative, out var original) && original == json) return;
+                plan.Write(Path.Combine(result.RelativeDir, relative), json);
+            }
+            if (config.AppSettingsJson != null) WriteIfChanged(files != null && files.RelativePaths.TryGetValue("", out var baseRelative) ? baseRelative : "appsettings.json", config.AppSettingsJson);
+            foreach (var (environment, json) in config.EnvironmentJson)
+                WriteIfChanged(files != null && files.RelativePaths.TryGetValue(environment, out var envRelative) ? envRelative : $"appsettings.{environment}.json", json);
         }
         if (secrets.Any)
         {
@@ -132,7 +138,7 @@ public static partial class ProjectMigrator
     internal static string EnsureConfigurationPackages(string csproj)
     {
         if (csproj.Contains("Microsoft.Extensions.Configuration.Json", StringComparison.OrdinalIgnoreCase) || csproj.Contains("Microsoft.Extensions.Hosting", StringComparison.OrdinalIgnoreCase) ||
-            csproj.Contains("Microsoft.NET.Sdk.Web", StringComparison.OrdinalIgnoreCase) || csproj.Contains("Microsoft.NET.Sdk.Worker", StringComparison.OrdinalIgnoreCase))
+            csproj.Contains("Microsoft.NET.Sdk.Web", StringComparison.OrdinalIgnoreCase) || csproj.Contains("Microsoft.NET.Sdk.Worker", StringComparison.OrdinalIgnoreCase) || csproj.Contains("Microsoft.AspNetCore.App", StringComparison.OrdinalIgnoreCase))
             return csproj;
         var tfm = Regex.Match(csproj, @"<TargetFrameworks?>([^<]+)</TargetFrameworks?>").Groups[1].Value;
         var version = tfm.Contains("net10", StringComparison.OrdinalIgnoreCase) ? "10.0.0" : tfm.Contains("net9", StringComparison.OrdinalIgnoreCase) ? "9.0.0" : "8.0.1";

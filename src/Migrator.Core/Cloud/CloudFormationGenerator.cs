@@ -225,14 +225,14 @@ public static partial class CloudFormationGenerator
         foreach (var (setting, parameter, _) in settings)
         {
             sb.AppendLine($"  {parameter}:");
-            sb.AppendLine($"    Description: \"{(setting.Kind == SettingKind.Url ? "URL" : "E-mail")} {setting.Key} ({(setting.Source == SettingSource.Code ? "estava fixo no código" : "appSettings")})\"");
+            sb.AppendLine($"    Description: \"{setting.Label} {setting.Key} ({(setting.Source == SettingSource.Code ? "estava fixo no código" : "appSettings")})\"");
             sb.AppendLine("    Type: String");
             sb.AppendLine($"    Default: \"{setting.Value.Replace("\"", "'")}\"");
         }
     }
 
     private static List<ExtractedSecret> SecretsFor(Deployable d) =>
-        d.Result.Secrets?.Secrets.Where(s => s.Environment is null or "Production").DistinctBy(s => s.EnvironmentVariable).ToList() ?? [];
+        d.Result.SecretsWithDependencies.Where(s => s.Environment is null or "Production").DistinctBy(s => s.EnvironmentVariable).ToList();
 
     private static List<(string Name, string Description)> SecretNames(string app, List<Deployable> deployables, bool framework)
     {

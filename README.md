@@ -12,7 +12,7 @@ Há dois destinos:
 | **Código** | Intocado; só os projetos sobem para .NET Framework 4.8.1 | Convertido (csproj SDK, `appsettings.json`, `Program.cs`, controllers com Roslyn, Worker Service...) e compilado |
 | **Proteção mínima** | URLs e e-mails fixos viram parâmetros por ambiente; senhas e tokens viram referências ao Secrets Manager | Idem |
 | **Hospedagem** | EC2 Windows (IIS, serviço Windows, Agendador) com Auto Scaling, ALB e CodeDeploy | ECS Fargate (web, workers, tarefas agendadas); Lambda só com `--serverless` |
-| **Infra** | CloudFormation no layout da plataforma (`infra/service.yml` + `infra/{dev,hom,prod}/parameters.json`) | Igual; Terraform com `--iac terraform` |
+| **Infra** | CloudFormation no layout da plataforma (`infra/service.yml` + `infra/{dev,hom,prod}/parameters.json`) | Igual; Terraform genérico com `--iac terraform`; Terraform nos módulos da plataforma com `--iac terraform-platform` |
 | **Saída padrão** | `<nome>.net481` | `<nome>.net10` |
 
 Nos dois casos a ferramenta entrega o **inventário** (o que ainda exige ação manual, com sugestão), os **dados acessados** (banco, tecnologia, tabelas e campos), as **sugestões de modernização** (bibliotecas pagas ou descontinuadas, código que muda de comportamento) e a **arquitetura alvo na AWS** (diagrama, serviços, fases, riscos, custo). Foi pensada para programas de migração em lote: dezenas de aplicações, mesma esteira, mesma arquitetura de referência.
@@ -231,6 +231,8 @@ Em projetos já em .NET (6/8/netstandard), onde não há `ConfigurationManager`,
 
 Os `appSettings` com URL/e-mail também viram parâmetros, com o valor por ambiente que os `Web.Debug.config`/`Web.Release.config` já declaravam. O `appsettings*.json` dos projetos modernos recebe o mesmo tratamento (`Migration/AppSettingsAnalyzer`): `ConnectionStrings` viram bancos na arquitetura e, com senha, segredos; chaves com nome de credencial (`Password`, `Pwd`, `Pw`, `Token`, `Secret`, `ApiKey`, `Senha`, `Chave`...) viram segredos com o marcador no arquivo; URLs e e-mails viram parâmetros com o valor de cada `appsettings.<Ambiente>.json`; pastas `\\servidor\...` entram na hospedagem (FSx/S3). Credenciais em qualquer seção do config (appSettings, connection strings, SMTP, `<identity>`, `sessionState`, `machineKey`, seções customizadas) saem para `_secrets/<projeto>/` (`appsettings.Secrets.json`, template, `create-secrets.sh`, bloco da task definition, user-secrets); `--keep-secrets` desliga.
 
+**Configuração fora do `appsettings*.json`.** Projetos que carregam `AddJsonFile($"Resources/{ambiente}.json")` guardam a configuração em `Resources/DES.json`, `PRD.json`, `DES.local.json` (também em `Config/`, `Configs/`, `Configuration/`, `Settings/`). Esses arquivos recebem o mesmo tratamento: os nomes de ambiente são normalizados (DES/DEV → Development, HML/HOM/QA/UAT/TST → Staging, PRD/PROD → Production) para casar com os parâmetros por ambiente da infra, comentários `//` são aceitos, e só os arquivos que mudaram são regravados no mesmo caminho. Connection string com `Token=` (além de `Password=`/`Pwd=`) e chaves `NomeUsuario*` contam como credencial. Chaves que existem só no arquivo de um ambiente não ganham valor nos demais. Pastas de rede (`\\servidor\...`, em JSON ou em literal `@"\\servidor\..."`) viram a seção `Caminhos`, listas de e-mail separadas por `;`/`,` valem como e-mail, o host de `new WebProxy("host", porta)` vira `Urls:ProxyHost` e valores em pares de dicionário/`Headers.Add("Cookie", "...")`/`["chave"] = "..."` herdam o nome da chave literal (`tokenPass`, `cookie` → `Credenciais:TokenPass`, `Credenciais:Cookie`). As credenciais de bibliotecas referenciadas (`SecretsWithDependencies`) chegam ao executável que as usa.
+
 Na infra: o EC2 recebe os parâmetros pelo Parameter Store (`/<feature>/<env>/...`, gravado no config pelo `after-install.ps1` do CodeDeploy) e os segredos pelo Secrets Manager; ECS e Lambda recebem variáveis de ambiente `AppSettings__Secao__Chave` e `secrets` da task definition. **Segredos nunca passam por template ou arquivo de parâmetros**: `data.yml` cria os nomes com `SecretString: PREENCHER` e `_secrets/<projeto>/create-secrets.sh` coloca os valores.
 
 ---
@@ -305,6 +307,15 @@ Reproduz o repositório padrão da plataforma. Infraestrutura compartilhada (VPC
 | `.github/workflows/deploy.yml` | framework: MSBuild em `windows-latest` → zip → CodeDeploy; net10: buildx linux/arm64 → ECR → `update-service` |
 
 Convenções: `FeatureName` (solução, só letras) e `MicroServiceName` (projeto sem o prefixo da solução, só letras) com `AllowedPattern "[a-z]*"`, `DevToolsAccount`, `Projeto`/`Negocio`, `Environment` (dev/hom/prod), bloco "NÃO ALTERE" da esteira, alarmes no tópico `{{resolve:ssm:/org/member/workload_local_sns_arn:1}}`. Os templates do sample passam limpos no `cfn-lint` nos dois destinos; revalide após mudar o gerador.
+
+### Terraform da plataforma (`--iac terraform-platform`)
+
+Para repositórios que sobem pela esteira da plataforma (ECS com módulos Terraform e `.iupipes.yml` com `infra.terraform`). O gerador (`Cloud/PlatformTerraformGenerator`) reproduz o layout dos repositórios migrados: `infra/terraform/{main,locals,variables,iamsr,iamsr-module,sg,data,outputs,provider}.tf` chamando `itau-hn8-modules-ecs-service//modules/worker` e `itau-ey4-modulo-iamsr` (cluster, VPC e subnets compartilhados: parâmetros, nunca criados), `iamsr/{policy,trust}-template/*.json`, `inventories/{dev,hom,prod}/terraform.tfvars`, `Dockerfile` (Alpine ARM64, CA corporativa, Datadog; a esteira faz o `publish` em `./app`), `.iupipes.yml` com `infra.terraform` + `deploy.aws.<env>.ecs` + `taac`/`p4all`, e `tests/testspec-*.yml`. As versões dos módulos são constantes no gerador.
+
+- **Hospedagem:** automações (consoles sem fila) viram **worker ECS de longa duração**, não tarefa agendada. Em projetos já SDK-style o console é convertido (`Migration/PlatformWorkerRewriter`, item `PLAT-WORKER`): o `Main()`/instruções de nível superior viram `LegacyEntryPoint.RunOnce`, `Process.Kill()`/`Environment.Exit()` viram `return`, e um `MigratorWorker : BackgroundService` repete o ciclo a cada `Worker:IntervalMinutes` (padrão 15) com `/health` (o `.csproj` ganha `FrameworkReference Microsoft.AspNetCore.App` e perde os pacotes `Microsoft.Extensions.*` que ele já traz). Console que ainda era .NET Framework recebe `PLAT-WORKER-MANUAL`. Web, Lambda, EC2 e tarefa agendada não geram Terraform (`AWS-INFRA-NOT-GENERATED`).
+- **Segredos:** um segredo JSON por aplicação (nome = solução), uma chave por credencial (`Config__SenhaUsuarioEmail`), injetado em `task_secrets` como `${arn}:Chave::`; os tfvars só têm o ARN e `secret_keys` (por ambiente). Os valores ficam em `_secrets/platform/secret-{dev,hom,prod}.json` com `create-platform-secret.sh <ambiente>` (sem BOM: AWS CLI e `json.load` rejeitam).
+- **Configuração:** `app_settings` (URLs, e-mails e pastas por ambiente, como variáveis `Secao__Chave`) e `app_environment` (variáveis que o código lê com `GetEnvironmentVariable`, ex. `COD_AMBI_EXEO`; quando existe `Resources/<valor>.json` o valor por ambiente já vem preenchido: DES em dev/hom, PRD em prod).
+- **Validação:** `terraform fmt -check` passa; `terraform validate` passa com os módulos substituídos por stubs (os módulos reais vêm do GitHub da plataforma e o provider `template` não existe para darwin_arm64). Placeholders `PREENCHER` ficam em cluster, VPC, subnets, CIDRs, ARN do segredo, tags (`locals.tf`) e `.iupipes.yml`.
 
 ### Terraform (`--iac terraform`)
 
@@ -451,7 +462,7 @@ migrator portfolio <pasta>   [--report] [--offline] [--nuget-config] [--nuget-so
 | `--target` | todos | `framework` (padrão: lift-and-shift, código intocado em .NET Framework 4.8.1, EC2 Windows) ou `net10` (reescreve o código, ECS Fargate) |
 | `--cloud` | todos | `aws` (padrão) ou `none`: desliga arquitetura, Dockerfiles e sugestões do tipo Cloud |
 | `--serverless` | todos | Recomenda Lambda (e gera handler/gatilhos) para automações orientadas a evento. Sem a opção elas ficam em tarefa ECS agendada com o `Main()` intacto |
-| `--iac` | migrate | `cloudformation` (padrão nos dois destinos; layout da plataforma) ou `terraform` |
+| `--iac` | migrate | `cloudformation` (padrão nos dois destinos; layout da plataforma), `terraform` (genérico: VPC, ECS, ALB) ou `terraform-platform` (módulos Terraform da plataforma, workers ECS) |
 | `--no-infra` | migrate | Não gera `infra/`, `.iupipes.yml`, `tests/` nem o workflow |
 
 **Pacotes e build**

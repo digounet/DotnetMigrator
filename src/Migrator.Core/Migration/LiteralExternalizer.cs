@@ -19,6 +19,9 @@ public static partial class LiteralExternalizer
     public const string UrlsSection = "Urls";
     public const string EmailsSection = "Emails";
     public const string SecretsSection = "Credenciais";
+    public const string PathsSection = "Caminhos";
+    /// <summary>Identifier given to the host argument of <c>new WebProxy("host", port)</c>.</summary>
+    internal const string ProxyHostIdentifier = "ProxyHost";
 
     private static readonly string[] IgnoredUrlHosts = ["localhost", "127.0.0.1", "0.0.0.0", "tempuri.org", "www.w3.org", "schemas.xmlsoap.org", "purl.org", "xmlns"];
     private static readonly string[] IgnoredUrlHostSuffixes = [".w3.org", ".openxmlformats.org", ".microsoft.com", ".xmlsoap.org", ".oasis-open.org", ".schemas.com"];
@@ -46,7 +49,7 @@ public static partial class LiteralExternalizer
             var kind = Classify(literal.Body, literal.Identifier, literal.Prefix);
             if (kind == null) continue;
             var line = text[..literal.Start].Count(c => c == '\n') + 1;
-            var skip = SkipReason(text, literal);
+            var skip = SkipReason(text, literal, kind.Value);
             if (skip != null)
             {
                 session.Literals.Add(new ExternalizedLiteral(kind.Value, KeyFor(kind.Value, literal.Body, literal.Identifier, session, reserve: false), literal.Body, file, line, false, skip));
@@ -79,6 +82,8 @@ public static partial class LiteralExternalizer
         if (PasswordInConnectionString().IsMatch(body) && !body.Contains("<secret:", StringComparison.Ordinal)) return SettingKind.Secret;
         if (identifier != null && CredentialIdentifier().IsMatch(identifier) && !NotCredential().IsMatch(identifier) && body.Length >= 6 && !body.StartsWith('{') && !body.StartsWith('<') && !body.StartsWith('$') && !body.StartsWith('%'))
             return SettingKind.Secret;
+        if (identifier == ProxyHostIdentifier && ProxyHost().IsMatch(body)) return SettingKind.Url;
+        if (UncPath().IsMatch(body)) return SettingKind.Path;
         var url = Url().Match(body);
         if (url.Success)
         {
@@ -93,11 +98,12 @@ public static partial class LiteralExternalizer
     private static string KeyFor(SettingKind kind, string value, string? identifier, Session session, bool reserve)
     {
         if (session.KeysByValue.TryGetValue(value, out var existing)) return existing;
-        var section = kind switch { SettingKind.Url => UrlsSection, SettingKind.Email => EmailsSection, _ => SecretsSection };
+        var section = kind switch { SettingKind.Url => UrlsSection, SettingKind.Email => EmailsSection, SettingKind.Path => PathsSection, _ => SecretsSection };
         var name = identifier != null ? Pascal(identifier) : kind switch
         {
             SettingKind.Url => Pascal(Url().Match(value).Groups["host"].Value),
             SettingKind.Email => Pascal(value.Split('@')[0]),
+            SettingKind.Path => Pascal(value.Split('\\', StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? "Pasta"),
             _ => "Segredo"
         };
         if (name.Length == 0) name = "Valor";
@@ -177,14 +183,22 @@ public static partial class LiteralExternalizer
         var before = text[statementStart..start];
         var assignment = AssignedIdentifier().Match(before);
         var identifier = assignment.Success ? assignment.Groups["id"].Value : null;
+        // { "tokenPass", "value" } / headers.Add("Cookie", "value") / ["key"] = "value": the key literal names the value.
+        if (identifier == null)
+        {
+            var pair = KeyedPair().Match(before);
+            if (pair.Success) identifier = pair.Groups["id"].Value;
+            else if (WebProxyHost().IsMatch(before)) identifier = ProxyHostIdentifier;
+        }
         var isConst = assignment.Success && ConstKeyword().IsMatch(before);
         return new Literal(start, end, body, prefix, identifier, isConst, statementStart);
     }
 
-    private static string? SkipReason(string text, Literal literal)
+    private static string? SkipReason(string text, Literal literal, SettingKind kind)
     {
         if (literal.Prefix.Contains('$')) return "string interpolada";
-        if (literal.Prefix.Contains('@') || literal.Prefix.Contains("\"\"\"", StringComparison.Ordinal)) return "string verbatim/raw";
+        // A verbatim literal is a single expression like any other: only the raw ones, and verbatim ones that are not a network path (their value can differ from the source text), stay.
+        if (literal.Prefix.Contains("\"\"\"", StringComparison.Ordinal) || literal.Prefix.Contains('@') && kind != SettingKind.Path) return "string verbatim/raw";
         var before = text[literal.StatementStart..literal.Start];
         var trimmed = before.TrimStart();
         if (trimmed.StartsWith('[') || AttributeContext().IsMatch(before)) return "literal em atributo";
@@ -196,6 +210,18 @@ public static partial class LiteralExternalizer
 
     [GeneratedRegex(@"(?<id>[A-Za-z_]\w*)\s*(?:=|:)\s*(?:new\s+Uri\s*\(\s*|new\s+MailAddress\s*\(\s*)?$")]
     private static partial Regex AssignedIdentifier();
+
+    [GeneratedRegex(@"(?:^\s*|\.Add\(\s*|\[\s*)""(?<id>[A-Za-z][\w\- ]*)""\s*(?:,|\]\s*=)\s*$")]
+    private static partial Regex KeyedPair();
+
+    [GeneratedRegex(@"new\s+(?:System\.Net\.)?WebProxy\s*\(\s*$")]
+    private static partial Regex WebProxyHost();
+
+    [GeneratedRegex(@"^[\w\-]+(?:\.[\w\-]+)+$")]
+    private static partial Regex ProxyHost();
+
+    [GeneratedRegex(@"^\\\\[\w.\-]+\\\S")]
+    private static partial Regex UncPath();
 
     [GeneratedRegex(@"\bconst\s+")]
     private static partial Regex ConstKeyword();
@@ -212,7 +238,7 @@ public static partial class LiteralExternalizer
     [GeneratedRegex(@"^https?://(?<host>[\w.\-]+)(?::\d+)?(?:/[^\s""]*)?$", RegexOptions.IgnoreCase)]
     private static partial Regex Url();
 
-    [GeneratedRegex(@"^[\w.+\-]+@[\w\-]+(?:\.[\w\-]+)+$")]
+    [GeneratedRegex(@"^[\w.+\-]+@[\w\-]+(?:\.[\w\-]+)+(?:\s*[;,]\s*[\w.+\-]+@[\w\-]+(?:\.[\w\-]+)+)*$")]
     private static partial Regex Email();
 
     [GeneratedRegex(@"^AKIA[0-9A-Z]{16}$")]
@@ -221,7 +247,7 @@ public static partial class LiteralExternalizer
     [GeneratedRegex(@"\b(?:Password|Pwd)\s*=\s*(?![;""{$%<])[^;]{3,}", RegexOptions.IgnoreCase)]
     private static partial Regex PasswordInConnectionString();
 
-    [GeneratedRegex(@"ApiKey|Api_Key|SecretKey|ClientSecret|AccessKey|SecretAccessKey|Password|Senha|Token|PrivateKey|Credential", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"ApiKey|Api_Key|SecretKey|ClientSecret|AccessKey|SecretAccessKey|Password|Senha|Token|PrivateKey|Credential|Cookie", RegexOptions.IgnoreCase)]
     private static partial Regex CredentialIdentifier();
 
     [GeneratedRegex(@"TokenType|TokenName|TokenHeader|PasswordField|PasswordLabel|PasswordHash|PasswordSalt|PasswordRegex|PasswordPattern|PasswordMin|PasswordMax|TokenPrefix|AntiForgery|ValidateAntiForgery|CancellationToken", RegexOptions.IgnoreCase)]

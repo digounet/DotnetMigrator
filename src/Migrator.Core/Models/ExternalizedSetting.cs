@@ -1,6 +1,6 @@
 namespace Migrator.Core.Models;
 
-public enum SettingKind { Url, Email, Secret }
+public enum SettingKind { Url, Email, Secret, Path }
 
 public enum SettingSource { Code, Config }
 
@@ -21,6 +21,8 @@ public sealed class ExternalizedSetting
     /// <summary>Secrets Manager name for <see cref="SettingKind.Secret"/>.</summary>
     public string? SecretName { get; init; }
     /// <summary>Values per environment known from config transforms (Development, Staging, Production).</summary>
+    /// <summary>True when the key exists only in environment-specific files (no base value): environments without a value must not receive one.</summary>
+    public bool EnvironmentOnly { get; init; }
     public Dictionary<string, string> EnvironmentValues { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Environment-variable form of the key (<c>AppSettings__Urls__ErpUrl</c>), what ECS/Lambda inject.</summary>
@@ -28,6 +30,9 @@ public sealed class ExternalizedSetting
 
     /// <summary>Parameter Store path form (<c>Urls/ErpUrl</c>, without the AppSettings root), what EC2 instances read.</summary>
     public string ParameterPath => (Key.StartsWith("AppSettings:", StringComparison.Ordinal) ? Key["AppSettings:".Length..] : Key).Replace(':', '/');
+
+    /// <summary>Human label of the kind (URL, E-mail, Pasta de rede, Segredo).</summary>
+    public string Label => Kind switch { SettingKind.Url => "URL", SettingKind.Email => "E-mail", SettingKind.Path => "Pasta de rede", _ => "Segredo" };
 
     public string ValueFor(string environment) => EnvironmentValues.TryGetValue(environment, out var v) ? v : Value;
 }

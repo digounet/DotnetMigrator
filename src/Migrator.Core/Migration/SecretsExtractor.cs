@@ -49,7 +49,7 @@ public static partial class SecretsExtractor
     private static string Scrub(string json, string prefix, string? environment, SecretsPlan plan)
     {
         JsonNode? root;
-        try { root = JsonNode.Parse(json); }
+        try { root = JsonNode.Parse(json, documentOptions: new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true }); }
         catch (JsonException) { return json; }
         if (root is not JsonObject obj) return json;
         Walk(obj, "", prefix, environment, plan);
@@ -68,7 +68,7 @@ public static partial class SecretsExtractor
                     Walk(child, configPath, prefix, environment, plan);
                     break;
                 case JsonValue value when value.TryGetValue<string>(out var text) && text.Length >= 3:
-                    var isSecretKey = SecretKey().IsMatch(key) && !key.Contains("publicKeyToken", StringComparison.OrdinalIgnoreCase);
+                    var isSecretKey = IsSecretKey(key);
                     var isConnectionStringWithPassword = (path.StartsWith("ConnectionStrings", StringComparison.OrdinalIgnoreCase) || key.EndsWith("ConnectionString", StringComparison.OrdinalIgnoreCase))
                                                          && PasswordInConnectionString().IsMatch(text);
                     if (!isSecretKey && !isConnectionStringWithPassword) break;
@@ -216,11 +216,17 @@ public static partial class SecretsExtractor
         return new Guid(bytes).ToString();
     }
 
+    /// <summary>Key names that hold a credential (shared with the appsettings profile, so what is reported is what gets extracted).</summary>
+    public static bool IsSecretKey(string key) => SecretKey().IsMatch(key) && !key.Contains("publicKeyToken", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Connection string carrying a password or a token (Itaú-style <c>token=id:user:hash</c>).</summary>
+    public static bool HasCredentialInConnectionString(string value) => PasswordInConnectionString().IsMatch(value);
+
     private static string Slug(string name) => Regex.Replace(name.ToLowerInvariant(), @"[^a-z0-9._-]+", "-").Trim('-');
 
-    [GeneratedRegex(@"password|pwd|secret|apikey|api_key|api-key|clientsecret|accesskey|access_key|token|senha|chave|(?-i:Pw)(?=[A-Z_\d]|$)|_pw$|credential", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"password|pwd|secret|apikey|api_key|api-key|clientsecret|accesskey|access_key|token|senha|chave|(?-i:Pw)(?=[A-Z_\d]|$)|_pw$|credential|nomeusuario", RegexOptions.IgnoreCase)]
     private static partial Regex SecretKey();
 
-    [GeneratedRegex(@"(password|pwd)\s*=\s*[^;]{1,}", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(password|pwd|token)\s*=\s*[^;]{1,}", RegexOptions.IgnoreCase)]
     private static partial Regex PasswordInConnectionString();
 }

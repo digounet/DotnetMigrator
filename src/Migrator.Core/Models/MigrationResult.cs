@@ -24,6 +24,8 @@ public sealed record MigrationOptions
     /// <summary>Infrastructure-as-code flavour. Null = CloudFormation (the platform's YAML layout) for both targets; Terraform is opt-in.</summary>
     public IacTool? Iac { get; init; }
     public IacTool EffectiveIac => Iac ?? IacTool.CloudFormation;
+    /// <summary>Terraform on the platform's own modules: consoles become ECS workers (long-running, /health) instead of scheduled tasks.</summary>
+    public bool UsesPlatformTerraform => EffectiveIac == IacTool.TerraformPlatform;
     public bool KeepsFramework => Target == MigrationTarget.NetFramework;
     /// <summary>
     /// Opt in to AWS Lambda for event-driven automations (requires rewriting the entry point as a handler). Off by default:
@@ -62,6 +64,14 @@ public sealed class ProjectResult
     public List<ExternalizedSetting> Settings { get; } = [];
     /// <summary>Own settings plus those of every referenced project: what the deployable actually needs at runtime (filled by the engine).</summary>
     public List<ExternalizedSetting> SettingsWithDependencies { get; } = [];
+    /// <summary>Environment variables the code reads (COD_AMBI_EXEO...) that the runtime does not provide: the IaC has to set them.</summary>
+    public List<string> EnvironmentVariablesRead { get; } = [];
+    /// <summary>Deploy environment (Development/Staging/Production) → name of the environment config file the code loads (DES, PRD, Development...).</summary>
+    public Dictionary<string, string> ConfigEnvironmentNames { get; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>True when a console entry point was rewritten as a long-running worker with /health (platform ECS worker module).</summary>
+    public bool ConvertedToWorker { get; set; }
+    /// <summary>Own credentials plus those of every referenced project (the library that holds a token in code still needs it injected into the host); filled by the engine.</summary>
+    public List<ExtractedSecret> SecretsWithDependencies { get; } = [];
     /// <summary>Raw data-access findings, resolved solution-wide by DataAccessAnalyzer.Resolve into <see cref="DataAccess"/>.</summary>
     internal DataAccessScan? DataScan { get; set; }
     public ProjectBuildStatus? Build { get; set; }

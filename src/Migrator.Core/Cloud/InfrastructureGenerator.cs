@@ -1420,7 +1420,7 @@ public static partial class InfrastructureGenerator
 
     /// <summary>Secrets the project's appsettings lost to _secrets/ (recomputed from the extracted plan when available).</summary>
     private static List<ExtractedSecret> SecretsFor(ProjectResult project, SolutionResult? _) =>
-        project.Secrets?.Secrets.Where(s => s.Environment is null or "Production").DistinctBy(s => s.EnvironmentVariable).ToList() ?? [];
+        project.SecretsWithDependencies.Where(s => s.Environment is null or "Production").DistinctBy(s => s.EnvironmentVariable).ToList();
 
     private static string Slug(string name) => Regex.Replace(name.ToLowerInvariant(), @"[^a-z0-9-]+", "-").Trim('-');
 

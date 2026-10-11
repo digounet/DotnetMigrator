@@ -207,7 +207,7 @@ public static partial class CloudFormationGenerator
                         {
                             var setting = plan.Deployables.SelectMany(d => d.Result.SettingsWithDependencies).FirstOrDefault(s => s.Kind != SettingKind.Secret && Logical(s.ParameterPath) == key);
                             var (group, description) = ParameterDocs.TryGetValue(key, out var doc) ? doc
-                                : setting != null ? ("Aplicação", $"{(setting.Kind == SettingKind.Url ? "URL" : "E-mail")} {setting.Key} ({(setting.Source == SettingSource.Code ? "estava fixo no código" : "appSettings")}); revise o valor de cada ambiente")
+                                : setting != null ? ("Aplicação", $"{setting.Label} {setting.Key} ({(setting.Source == SettingSource.Code ? "estava fixo no código" : "appSettings")}); revise o valor de cada ambiente")
                                 : ("Aplicação", "");
                             parameters[key] = p = new InfraParameter { Name = key, Group = group, Description = description, Placeholder = setting == null && IsPlaceholder(key, value) };
                         }
@@ -217,6 +217,25 @@ public static partial class CloudFormationGenerator
                         else if (existing != value && existing != "(varia por arquivo)") p.Values[environment] = "(varia por arquivo)";
                     }
             guide.Parameters.AddRange(parameters.Values.OrderBy(p => p.Group switch { "Esteira" => 0, "Compartilhada" => 1, "Tags" => 2, "Dimensionamento" => 3, "Dados" => 4, _ => 5 }).ThenBy(p => p.Name, StringComparer.Ordinal));
+        }
+        else if (result.Options.UsesPlatformTerraform)
+        {
+            guide.Files.Add(new InfraFile { Path = $"{InfraDir}/terraform/", Purpose = "Terraform nos módulos da plataforma (worker ECS + iamsr), locals e variáveis", DeployOrder = 1 });
+            guide.Files.Add(new InfraFile { Path = $"{InfraDir}/terraform/inventories/<ambiente>/terraform.tfvars", Purpose = "um arquivo por ambiente: cluster, rede, ARN do segredo, chaves de segredo, app_settings e app_environment" });
+            guide.Files.Add(new InfraFile { Path = "Dockerfile", Purpose = "imagem Alpine ARM64 do worker (publish já feito pela esteira em ./app)" });
+            guide.Files.Add(new InfraFile { Path = ".iupipes.yml", Purpose = "esteira: build, infra.terraform, deploy ECS (in-place), Sonar, Fortify, TAAC" });
+            guide.Files.Add(new InfraFile { Path = $"{SecretsExtractor.RootFolder}/platform/", Purpose = "valores do segredo JSON único (fora do git) e o script que o cria em cada conta" });
+            foreach (var (name, description, placeholder) in new[]
+            {
+                ("ecs_cluster_name", "Cluster ECS compartilhado onde o worker roda.", true), ("service_vpc_id", "VPC compartilhada.", true), ("service_subnets", "Subnets do worker.", true), ("service_cidr_blocks", "CIDRs que acessam o /health.", true),
+                ("application_secret_arn", "ARN completo do segredo JSON da aplicação (criado por create-platform-secret.sh).", true), ("secret_keys", "Variável de ambiente → chave do segredo JSON (uma por credencial).", false),
+                ("app_settings", "URLs, e-mails e pastas externalizados (Secao__Chave → valor), um valor por ambiente.", false), ("app_environment", "Variáveis que o código lê diretamente (ex.: COD_AMBI_EXEO).", false)
+            })
+            {
+                var p = new InfraParameter { Name = name, Group = "Terraform", Description = description, Placeholder = placeholder };
+                p.Files.Add("inventories/<ambiente>/terraform.tfvars");
+                guide.Parameters.Add(p);
+            }
         }
         else
         {
@@ -279,7 +298,7 @@ public static partial class CloudFormationGenerator
                 Name = name, Holds = description.Split("; valor via")[0].TrimEnd('.'),      // the "how to fill" part has its own column
                 DeliveredAs = extracted == null ? "chaves do config da instância (after-install.ps1)" : plan.Framework ? $"chave {extracted.ConfigPath} do config (after-install.ps1)" : owners.Any(o => o.Result.Hosting!.Primary == AwsHosting.Lambda) ? $"variável {extracted.EnvironmentVariable}_SECRET com o nome; ler com AWSSDK.SecretsManager" : $"variável {extracted.EnvironmentVariable} (Secrets da task definition)",
                 HowToFill = extracted == null ? "manual: JSON chave→valor com as connection strings e demais chaves do config que não podem ficar no repositório" : $"_secrets/{owners.First().Result.Project.Name}/create-secrets.sh (valor guardado em _secrets/, fora do git); rotacionar depois",
-                CreatedBy = cloudFormation ? $"{InfraDir}/data.yml (SecretString: PREENCHER)" : "_secrets/<projeto>/create-secrets.sh (Terraform só referencia por nome)"
+                CreatedBy = cloudFormation ? $"{InfraDir}/data.yml (SecretString: PREENCHER)" : result.Options.UsesPlatformTerraform ? "_secrets/platform/create-platform-secret.sh (segredo JSON único; o Terraform só recebe o ARN)" : "_secrets/<projeto>/create-secrets.sh (Terraform só referencia por nome)"
             };
             secret.UsedBy.AddRange(owners.Select(o => o.Result.Project.Name));
             guide.Secrets.Add(secret);
@@ -292,7 +311,7 @@ public static partial class CloudFormationGenerator
         {
             var s = new SettingSetup
             {
-                Key = setting.Key, Kind = setting.Kind == SettingKind.Url ? "URL" : "E-mail", Parameter = cloudFormation ? parameter : $"app_settings[\"{setting.EnvironmentVariable}\"]",
+                Key = setting.Key, Kind = setting.Label, Parameter = cloudFormation ? parameter : $"app_settings[\"{setting.EnvironmentVariable}\"]",
                 EnvironmentVariable = plan.Framework ? null : setting.EnvironmentVariable,
                 ParameterStorePath = plan.Framework ? $"/{plan.Feature}/<env>/{setting.ParameterPath}" : null,
                 Source = setting.Source == SettingSource.Code ? $"fixo no código ({setting.Location})" : $"appSettings ({setting.Location})"

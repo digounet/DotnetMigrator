@@ -66,7 +66,7 @@ public sealed class MigrationEngine
         var (nugetConfig, nugetSource) = ResolveNuGetSource(options, workspace.RootDir, result);
         result.NuGetSource = nugetSource.ToString();
         using var nuget = new NuGetClient(options.Offline, nugetSource);
-        var context = new ProjectMigrationContext(workspace.RootDir, map, new PackagePlanner(nuget), UsesSystemDataSqlClient(projects), options.Cloud, workspace.Name, options.KeepSecrets, options.Target);
+        var context = new ProjectMigrationContext(workspace.RootDir, map, new PackagePlanner(nuget), UsesSystemDataSqlClient(projects), options.Cloud, workspace.Name, options.KeepSecrets, options.Target, options.UsesPlatformTerraform);
 
         var migrated = new List<MigratedProject>();
         foreach (var project in projects)
@@ -111,6 +111,9 @@ public sealed class MigrationEngine
             // What a deployable needs at runtime: its own settings plus those of every library it ships.
             var all = project.Result.Settings.Concat(PackageAligner.Closure(project, ordered).SelectMany(c => c.Result.Settings)).DistinctBy(s => s.Key, StringComparer.OrdinalIgnoreCase);
             project.Result.SettingsWithDependencies.AddRange(all);
+            var secretsOfClosure = (project.Result.Secrets?.Secrets ?? []).Concat(PackageAligner.Closure(project, ordered).SelectMany(c => c.Result.Secrets?.Secrets ?? []))
+                .DistinctBy(x => (x.EnvironmentVariable, x.Environment));
+            project.Result.SecretsWithDependencies.AddRange(secretsOfClosure);
         }
         List<(ProjectResult Result, ApplicationProfile Profile)>? profiles = null;
         if (options.Cloud == CloudTarget.Aws)
@@ -127,9 +130,19 @@ public sealed class MigrationEngine
         {
             var cloudFormation = options.EffectiveIac == IacTool.CloudFormation;
             progress?.Report($"Gerando infraestrutura como código ({options.EffectiveIac.Display()}) e pipeline...");
-            var files = cloudFormation ? CloudFormationGenerator.Generate(result, profiles) : InfrastructureGenerator.Generate(result, profiles);
-            if (!cloudFormation) foreach (var (path, content) in CloudFormationGenerator.PlatformFiles(result, profiles)) files[path] = content; // pipeline descriptor + TAAC specs come with any IaC
+            var platformTerraform = options.UsesPlatformTerraform;
+            var files = cloudFormation ? CloudFormationGenerator.Generate(result, profiles) : platformTerraform ? PlatformTerraformGenerator.Generate(result, profiles) : InfrastructureGenerator.Generate(result, profiles);
+            if (!cloudFormation && !platformTerraform) foreach (var (path, content) in CloudFormationGenerator.PlatformFiles(result, profiles)) files[path] = content; // pipeline descriptor + TAAC specs come with any IaC
             var carrier = migrated.FirstOrDefault(m => m.Result.OutputProjectPath != null);
+            if (platformTerraform)
+                foreach (var skipped in PlatformTerraformGenerator.NotGenerated(result, profiles))
+                    result.GlobalItems.Add(new InventoryItem
+                    {
+                        Project = skipped.Project.Name, Severity = InventorySeverity.Warning, Category = InventoryCategory.ProjectFile, RuleId = "AWS-INFRA-NOT-GENERATED",
+                        Title = $"Infraestrutura não gerada: {skipped.Project.Name} ({skipped.Hosting!.Primary.Display()})",
+                        Description = "Os módulos Terraform da plataforma usados em --iac terraform-platform cobrem workers ECS; este projeto tem outro tipo de hospedagem.",
+                        Suggestion = "Crie a infraestrutura com o template da plataforma para este tipo de serviço (ou rode com --iac cloudformation/terraform para um ponto de partida)."
+                    });
             if (files.Count > 0 && carrier != null)
             {
                 foreach (var (path, content) in files) carrier.Plan.Write(path, content);
@@ -142,6 +155,14 @@ public sealed class MigrationEngine
                             ? "infra/service*.yml (EC2 Windows em Auto Scaling, regra no ALB compartilhado, CodeDeploy, Parameter Store, alarmes), infra/data.yml (RDS, S3/FSx, segredos), infra/{dev,hom,prod}/parameters*.json, infra/codedeploy/ (appspec + scripts PowerShell por projeto), .iupipes.yml, tests/ e .github/workflows/deploy.yml; o guia de implantação do relatório e o README da saída dizem o que preencher."
                             : "infra/service*.yml (ECS Fargate no padrão da plataforma), infra/lambda-*.yml, infra/data.yml (RDS, S3, filas, segredos), infra/{dev,hom,prod}/parameters*.json, .iupipes.yml, tests/ e .github/workflows/deploy.yml; o guia de implantação do relatório e o README da saída dizem o que preencher.",
                         Suggestion = "Preencha infra/<env>/parameters*.json e .iupipes.yml, rode infra/deploy.sh (ou deploy.ps1) na ordem indicada e coloque os valores nos segredos antes do primeiro deploy (seção Guia de implantação).", AutoMigrated = true, FilePath = "infra/README.md"
+                    }
+                    : platformTerraform
+                    ? new InventoryItem
+                    {
+                        Project = "(solução)", Severity = InventorySeverity.Info, Category = InventoryCategory.ProjectFile, RuleId = "AWS-INFRA",
+                        Title = $"Infraestrutura como código gerada (módulos da plataforma): {files.Count(f => f.Key.EndsWith(".tf", StringComparison.Ordinal))} arquivos Terraform + Dockerfile + .iupipes.yml",
+                        Description = "infra/terraform/ (módulo worker do ECS e iamsr da plataforma, locals, variáveis), inventories/{dev,hom,prod}/terraform.tfvars, Dockerfile Alpine ARM64 (CA corporativa, Datadog), .iupipes.yml com infra.terraform e _secrets/platform/ (segredo JSON único da aplicação).",
+                        Suggestion = "Preencha os PREENCHER dos tfvars, locals.tf e .iupipes.yml, crie o segredo com _secrets/platform/create-platform-secret.sh e rotacione as credenciais antigas.", AutoMigrated = true, FilePath = "infra/README.md"
                     }
                     : new InventoryItem
                     {
@@ -344,7 +365,7 @@ public sealed class MigrationEngine
         {
             var closure = PackageAligner.Closure(project, ordered).ToList();
             var merged = project.Profile.MergeWith(closure.Select(c => c.Profile));
-            var hosting = AwsArchitect.Recommend(project.Result.Project, merged, result.Options.Target, result.Options.Serverless);
+            var hosting = AwsArchitect.Recommend(project.Result.Project, merged, result.Options.Target, result.Options.Serverless, result.Options.UsesPlatformTerraform);
             project.Result.Hosting = hosting;
             profiles.Add((project.Result, merged));
 
@@ -353,6 +374,12 @@ public sealed class MigrationEngine
             {
                 if (project.Spec != null)
                     LambdaScaffolder.Scaffold(project.Result.Project, merged, project.Spec, project.Plan, project.Result.RelativeDir, project.Result.Inventory);
+                continue;
+            }
+            if (result.Options.UsesPlatformTerraform)
+            {
+                // The platform pipeline publishes first and builds the image from the working directory's Dockerfile (written by PlatformTerraformGenerator).
+                hosting.DockerfileGenerated = true;
                 continue;
             }
             var dependencies = closure.Where(c => c.Result.OutputProjectPath != null).Select(c => c.Result.OutputProjectPath!).ToList();
@@ -552,9 +579,10 @@ public sealed class MigrationEngine
     private static bool WantsBom(string relativePath)
     {
         var name = Path.GetFileName(relativePath);
-        if (name is "Dockerfile" or ".dockerignore" or ".gitignore" or ".editorconfig") return false;
+        if (name is "Dockerfile" or ".dockerignore" or ".gitignore" or ".editorconfig" || name.StartsWith("Dockerfile.", StringComparison.Ordinal)) return false;
         var unix = relativePath.Replace('\\', '/');
-        if (unix.StartsWith("infra/", StringComparison.Ordinal) || unix.StartsWith(".github/", StringComparison.Ordinal)) return false; // YAML/JSON/scripts consumed by the AWS CLI and PowerShell
+        // The secrets folder is read by the AWS CLI and python json.load: a BOM breaks both.
+        if (unix.StartsWith("infra/", StringComparison.Ordinal) || unix.StartsWith(".github/", StringComparison.Ordinal) || unix.StartsWith(SecretsExtractor.RootFolder + "/", StringComparison.Ordinal)) return false; // YAML/JSON/scripts consumed by the AWS CLI and PowerShell
 
         return Path.GetExtension(name).ToLowerInvariant() switch
         {
@@ -624,6 +652,7 @@ public sealed class MigrationEngine
         foreach (var project in ordered)
         {
             var info = project.Result.Project;
+            if (project.Result.OutputProjectPath == null) continue; // analysis-only projects (VB.NET) are not written, so there is nothing to build
             var failedDependency = PackageAligner.Closure(project, ordered).FirstOrDefault(d => failed.Contains(d.Result.Project.ProjectPath));
             if (failedDependency != null)
             {

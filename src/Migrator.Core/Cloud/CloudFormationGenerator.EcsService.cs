@@ -227,7 +227,7 @@ public static partial class CloudFormationGenerator
         foreach (var (setting, parameter, _) in settings)
         {
             sb.AppendLine($"  {parameter}:");
-            sb.AppendLine($"    Description: \"{(setting.Kind == SettingKind.Url ? "URL" : "E-mail")} {setting.Key} ({(setting.Source == SettingSource.Code ? "estava fixo no codigo" : "appSettings")})\"");
+            sb.AppendLine($"    Description: \"{setting.Label} {setting.Key} ({(setting.Source == SettingSource.Code ? "estava fixo no codigo" : "appSettings")})\"");
             sb.AppendLine("    Type: String");
             sb.AppendLine($"    Default: '{setting.Value.Replace("'", "''")}'");
         }

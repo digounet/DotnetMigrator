@@ -69,6 +69,6 @@ public static partial class ConfigSettingsCollector
     [GeneratedRegex(@"^https?://[\w.\-]+(?::\d+)?(?:/\S*)?$", RegexOptions.IgnoreCase)]
     private static partial Regex Url();
 
-    [GeneratedRegex(@"^[\w.+\-]+@[\w\-]+(?:\.[\w\-]+)+$")]
+    [GeneratedRegex(@"^[\w.+\-]+@[\w\-]+(?:\.[\w\-]+)+(?:\s*[;,]\s*[\w.+\-]+@[\w\-]+(?:\.[\w\-]+)+)*$")]
     private static partial Regex Email();
 }

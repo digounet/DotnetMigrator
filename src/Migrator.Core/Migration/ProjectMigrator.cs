@@ -18,7 +18,7 @@ public sealed class OutputPlan
     private static string Normalize(string path) => path.Replace('/', Path.DirectorySeparatorChar).TrimStart(Path.DirectorySeparatorChar);
 }
 
-public sealed record ProjectMigrationContext(string RootDir, IReadOnlyDictionary<string, string> ProjectMap, PackagePlanner Planner, bool PreserveSqlEncryption, CloudTarget Cloud = CloudTarget.Aws, string SolutionName = "app", bool KeepSecrets = false, MigrationTarget Target = MigrationTarget.Net10);
+public sealed record ProjectMigrationContext(string RootDir, IReadOnlyDictionary<string, string> ProjectMap, PackagePlanner Planner, bool PreserveSqlEncryption, CloudTarget Cloud = CloudTarget.Aws, string SolutionName = "app", bool KeepSecrets = false, MigrationTarget Target = MigrationTarget.Net10, bool PlatformWorkers = false);
 
 public static partial class ProjectMigrator
 {
@@ -106,6 +106,7 @@ public static partial class ProjectMigrator
             InspectBinaries(project, modernProfile);
             // appsettings*.json and fixed literals: same treatment the legacy projects get (databases, secrets, parameters per environment).
             var needsConfigurationPackages = ApplyModernConfiguration(project, ctx, result, plan, modernProfile);
+            if (ctx.PlatformWorkers) csproj = ApplyPlatformWorker(project, ctx, result, plan, modernCode, csproj);
             plan.Write(result.OutputProjectPath, needsConfigurationPackages ? EnsureConfigurationPackages(csproj) : csproj);
             result.Modernizations.AddRange(ModernizationAdvisor.Analyze(project, modernProfile, modernCode, ctx.Cloud));
             result.DataScan = DataAccessAnalyzer.Scan(project, modernCode.Concat(DataFiles(project)));
@@ -131,6 +132,12 @@ public static partial class ProjectMigrator
         // Fixed URLs/e-mails/credentials in the code become configuration reads before any other rewrite (the regular
         // pipeline then turns ConfigurationManager.AppSettings[...] into configuration[...]); the keys are added to the config below.
         var externalized = ExternalizeLiterals(project, codeEntries, result, ctx);
+
+        if (ctx.PlatformWorkers && project.Kind == ProjectKind.Console)
+            items.Add(Item(project, InventorySeverity.Warning, InventoryCategory.Code, "PLAT-WORKER-MANUAL",
+                "Console legado não convertido em worker",
+                "A plataforma hospeda automações como worker ECS (BackgroundService com /health). A conversão automática cobre projetos que já são SDK-style; este console foi reescrito para .NET 10 mas mantém o Main() que termina com o processo.",
+                "Converta o Main() em um BackgroundService que repete o ciclo e exponha /health (veja PLAT-WORKER em um projeto convertido automaticamente como modelo) antes do primeiro deploy."));
 
         // Windows Service → Worker Service (BackgroundService): deterministic, so the project can run in a Linux container.
         var workers = project.Kind == ProjectKind.WindowsService ? WorkerServiceRewriter.Discover(originalCode) : new WorkerServiceInfo();

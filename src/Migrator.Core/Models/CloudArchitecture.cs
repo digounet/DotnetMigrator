@@ -5,7 +5,7 @@ public enum CloudTarget { None, Aws }
 /// <summary>What the output targets: a .NET 10 rewrite or the same code on the latest .NET Framework.</summary>
 public enum MigrationTarget { Net10, NetFramework }
 
-public enum IacTool { Terraform, CloudFormation }
+public enum IacTool { Terraform, CloudFormation, TerraformPlatform }
 
 public static class TargetText
 {
@@ -15,7 +15,7 @@ public static class TargetText
 
     public static string Display(this MigrationTarget target) => target == MigrationTarget.NetFramework ? ".NET Framework 4.8.1" : ".NET 10";
     public static string Moniker(this MigrationTarget target) => target == MigrationTarget.NetFramework ? FrameworkVersion : "net10.0";
-    public static string Display(this IacTool tool) => tool == IacTool.CloudFormation ? "CloudFormation" : "Terraform";
+    public static string Display(this IacTool tool) => tool switch { IacTool.CloudFormation => "CloudFormation", IacTool.TerraformPlatform => "Terraform (módulos da plataforma)", _ => "Terraform" };
 }
 
 /// <summary>Where a deployable project should run on AWS.</summary>
